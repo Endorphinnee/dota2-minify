@@ -53,6 +53,17 @@
       "key": "fetch_draft_data",
       "text": "Download hero data now",
       "type": "button"
+    },
+    {
+      "key": "stratz_token",
+      "text": "STRATZ API token (stratz.com/api)",
+      "type": "inputbox",
+      "default": ""
+    },
+    {
+      "key": "check_stratz",
+      "text": "Check STRATZ connection",
+      "type": "button"
     }
   ]
 }

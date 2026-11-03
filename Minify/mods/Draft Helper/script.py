@@ -14,6 +14,7 @@ if current_dir not in sys.path:
 # isort: split
 
 import draft_helper_core
+import stratz
 from core import config, log, output
 from patch import manifest_utils
 
@@ -24,9 +25,22 @@ def get_settings():
     return manifest_utils.get_effective_settings(manifest_utils.get_mod(current_dir), config.get_mod(mod_name))
 
 
-def main():
+def move_token_out_of_config(settings):
+    # The token is kept in a private file next to the mod, not in Minify's main config
     try:
-        status, dataset = draft_helper_core.generate(get_settings(), refresh=True)
+        if stratz.store_token(settings.get("stratz_token")):
+            mod_cfg = config.get_mod(mod_name)
+            mod_cfg["stratz_token"] = ""
+            config.set_mod(mod_name, mod_cfg)
+    except Exception:
+        pass
+
+
+def main():
+    settings = get_settings()
+    move_token_out_of_config(settings)
+    try:
+        status, dataset = draft_helper_core.generate(settings, refresh=True)
     except Exception as e:
         # Never break the patch because of this mod
         log.write_warning(f"[Draft Helper] failed to prepare data: {e}")

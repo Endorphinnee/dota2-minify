@@ -10,6 +10,14 @@ var MinifyDraftHelper = (function () {
   const ROWS = 8;
   const MIN_SIZE = 1;
   const MAX_SIZE = 5;
+  const SIZE_TO_SCALE = { 1: 70, 2: 85, 3: 100, 4: 120, 5: 140 };
+  const MIN_SCALE = 50;
+  const MAX_SCALE = 200;
+  const NORMAL_WIDTH = 470;
+  const WIDE_WIDTH = 650;
+  const MIN_WIDTH = 380;
+  const MAX_WIDTH = 1000;
+  const STATE_ATTRIBUTE = "minify_draft_helper_state";
   const TICK_SECONDS = 0.5;
   const COMMAND_NAME = "minify_draft_helper_toggle";
 
@@ -97,8 +105,11 @@ var MinifyDraftHelper = (function () {
   } catch (e) {}
 
   const state = {
-    size: clamp(parseInt(CFG.size, 10) || 3, MIN_SIZE, MAX_SIZE),
-    wide: false,
+    scale: SIZE_TO_SCALE[clamp(parseInt(CFG.size, 10) || 3, MIN_SIZE, MAX_SIZE)],
+    width: NORMAL_WIDTH,
+    free: false, // true once the window has been dragged somewhere
+    left: 0,
+    top: 0,
     collapsed: false,
     hidden: false,
     manualPos: 0,
@@ -493,7 +504,10 @@ var MinifyDraftHelper = (function () {
 
   function label(parent, cls, text) {
     const l = createPanel("Label", parent, "");
-    l.AddClass(cls);
+    // AddClass takes a single class name, so "A B" has to be split
+    cls.split(" ").forEach((c) => {
+      if (c) l.AddClass(c);
+    });
     l.text = text;
     return l;
   }
@@ -518,7 +532,7 @@ var MinifyDraftHelper = (function () {
     header.AddClass("MDH_Row");
     header.AddClass("MDH_HeaderRow");
     label(header, "MDH_IconSpacer", "");
-    label(header, "MDH_Name", T.hero);
+    label(header, "MDH_Name", T.hero + " · dotapicker");
     const totalHeader = label(header, "MDH_Cell", T.total);
     totalHeader.SetPanelEvent("onmouseover", () => showTooltip(totalHeader, T.tooltipTotal));
     totalHeader.SetPanelEvent("onmouseout", hideTooltip);
@@ -613,11 +627,38 @@ var MinifyDraftHelper = (function () {
     if (s) s.text = text;
   }
 
+  function nearestSize(scale) {
+    let best = 3;
+    for (let i = MIN_SIZE; i <= MAX_SIZE; i++) {
+      if (Math.abs(SIZE_TO_SCALE[i] - scale) < Math.abs(SIZE_TO_SCALE[best] - scale)) best = i;
+    }
+    return best;
+  }
+
   function applyLayoutClasses() {
     const root = el("MDH_Root");
-    if (!root) return;
-    for (let i = MIN_SIZE; i <= MAX_SIZE; i++) root.SetHasClass("MDH_Size" + i, i === state.size);
-    root.SetHasClass("MDH_Wide", state.wide);
+    const win = el("MDH_Window");
+    if (!root || !win) return;
+    // Size classes are a fallback in case inline ui-scale is not supported
+    const size = nearestSize(state.scale);
+    for (let i = MIN_SIZE; i <= MAX_SIZE; i++) root.SetHasClass("MDH_Size" + i, i === size);
+    try {
+      win.style.uiScale = state.scale + "%";
+    } catch (e) {}
+    try {
+      win.style.width = state.width + "px";
+    } catch (e) {}
+    root.SetHasClass("MDH_Wide", state.width >= 600);
+    root.SetHasClass("MDH_Free", state.free);
+    if (state.free) {
+      try {
+        root.style.position = Math.round(state.left) + "px " + Math.round(state.top) + "px 0px";
+      } catch (e) {}
+    } else {
+      try {
+        root.style.position = null;
+      } catch (e) {}
+    }
     root.SetHasClass("MDH_Collapsed", state.collapsed);
     root.SetHasClass("MDH_Hidden", state.hidden);
     root.SetHasClass("MDH_Left", CFG.side === "left");
@@ -755,16 +796,154 @@ var MinifyDraftHelper = (function () {
 
   // ------------------------------------------------------------------ commands
 
+  // ------------------------------------------------------------------ persistence
+  // Panorama mods cannot write files; the state is kept on the top-level UI panel,
+  // which lives for the whole Dota session, so it survives between matches.
+
+  function topPanel() {
+    let p = ctx();
+    while (p && p.GetParent()) p = p.GetParent();
+    return p;
+  }
+
+  function saveState() {
+    try {
+      const data = {
+        scale: state.scale,
+        width: state.width,
+        free: state.free,
+        left: state.left,
+        top: state.top,
+        collapsed: state.collapsed,
+      };
+      topPanel().SetAttributeString(STATE_ATTRIBUTE, JSON.stringify(data));
+    } catch (e) {}
+  }
+
+  function loadState() {
+    try {
+      const raw = topPanel().GetAttributeString(STATE_ATTRIBUTE, "");
+      if (!raw) return;
+      const data = JSON.parse(raw);
+      if (data.scale) state.scale = clamp(data.scale, MIN_SCALE, MAX_SCALE);
+      if (data.width) state.width = clamp(data.width, MIN_WIDTH, MAX_WIDTH);
+      state.free = !!data.free;
+      state.left = data.left || 0;
+      state.top = data.top || 0;
+      state.collapsed = !!data.collapsed;
+    } catch (e) {}
+  }
+
+  // ------------------------------------------------------------------ drag & resize
+  // Panorama has no mouse-move events for HUD panels, so while the cursor is over a
+  // handle (title bar, right edge, corner) the mouse is polled every frame.
+
+  const drag = { hover: null, armed: false, mode: null, polling: false };
+
+  function cursor() {
+    const c = GameUI.GetCursorPosition();
+    return { x: c[0], y: c[1] };
+  }
+
+  function screenScale() {
+    // screen pixels per layout pixel of the HUD (window ui-scale excluded)
+    const root = el("MDH_Root");
+    const s = root ? root.actualuiscale_x : 1;
+    return s > 0 ? s : 1;
+  }
+
+  function hover(kind) {
+    drag.hover = kind;
+    try {
+      drag.armed = !GameUI.IsMouseDown(0);
+    } catch (e) {
+      drag.armed = false;
+    }
+    if (!drag.polling) {
+      drag.polling = true;
+      $.Schedule(0, dragTick);
+    }
+  }
+
+  function unhover(kind) {
+    if (drag.hover === kind) drag.hover = null;
+  }
+
+  function beginDrag(kind) {
+    const win = el("MDH_Window");
+    if (!win) return;
+    const pos = win.GetPositionWithinWindow();
+    const k = screenScale();
+    drag.mode = kind;
+    drag.start = cursor();
+    drag.startLeft = pos.x / k;
+    drag.startTop = pos.y / k;
+    drag.startScale = state.scale;
+    drag.startWidth = state.width;
+    drag.startWinWidth = win.actuallayoutwidth || 1;
+    if (!state.free) {
+      // Switch from the docked (right/left aligned) layout to a free position
+      state.free = true;
+      state.left = drag.startLeft;
+      state.top = drag.startTop;
+      applyLayoutClasses();
+    }
+  }
+
+  function moveDrag() {
+    const c = cursor();
+    const k = screenScale();
+    const dx = c.x - drag.start.x;
+    const dy = c.y - drag.start.y;
+    if (drag.mode === "move") {
+      const maxLeft = Game.GetScreenWidth() / k - 60;
+      const maxTop = Game.GetScreenHeight() / k - 30;
+      state.left = clamp(drag.startLeft + dx / k, 0, maxLeft);
+      state.top = clamp(drag.startTop + dy / k, 0, maxTop);
+    } else if (drag.mode === "scale") {
+      // Corner: scale the whole window, following the cursor horizontally
+      const factor = (drag.startWinWidth + dx) / drag.startWinWidth;
+      state.scale = clamp(Math.round(drag.startScale * factor), MIN_SCALE, MAX_SCALE);
+    } else if (drag.mode === "width") {
+      // Right edge: stretch the window, the text size stays the same
+      const px = dx / k / (state.scale / 100);
+      state.width = clamp(Math.round(drag.startWidth + px), MIN_WIDTH, MAX_WIDTH);
+    }
+    applyLayoutClasses();
+  }
+
+  function dragTick() {
+    let down = false;
+    try {
+      down = GameUI.IsMouseDown(0);
+    } catch (e) {}
+    if (!drag.mode && drag.hover) {
+      if (!down) drag.armed = true;
+      else if (drag.armed) beginDrag(drag.hover);
+    }
+    if (drag.mode) {
+      if (down) moveDrag();
+      else {
+        drag.mode = null;
+        saveState();
+      }
+    }
+    if (drag.mode || drag.hover) $.Schedule(0, dragTick);
+    else drag.polling = false;
+  }
+
   function command(name) {
-    if (name === "bigger") state.size = clamp(state.size + 1, MIN_SIZE, MAX_SIZE);
-    else if (name === "smaller") state.size = clamp(state.size - 1, MIN_SIZE, MAX_SIZE);
-    else if (name === "wide") state.wide = !state.wide;
+    if (name === "bigger") state.scale = clamp(state.scale + 10, MIN_SCALE, MAX_SCALE);
+    else if (name === "smaller") state.scale = clamp(state.scale - 10, MIN_SCALE, MAX_SCALE);
+    else if (name === "wide") state.width = state.width >= 600 ? NORMAL_WIDTH : WIDE_WIDTH;
+    else if (name === "dock") state.free = false;
     else if (name === "collapse") state.collapsed = !state.collapsed;
     else if (name === "hide") state.hidden = true;
     else if (name === "show") state.hidden = false;
     else if (name === "toggle") state.hidden = !state.hidden;
     else if (name.indexOf("pos") === 0) state.manualPos = parseInt(name.substring(3), 10) || 0;
     applyLayoutClasses();
+    saveState();
     try {
       update(true);
     } catch (e) {
@@ -797,16 +976,25 @@ var MinifyDraftHelper = (function () {
     if (debugEntry) debugEntry.visible = !!CFG.debug;
     const hk = el("MDH_HotkeyHint");
     if (hk) hk.text = CFG.hotkey && CFG.hotkey !== "None" ? CFG.hotkey : "";
+    loadState();
     applyLayoutClasses();
     registerHotkey();
     tick();
   }
 
-  return { init: init, command: command };
+  return { init: init, command: command, hover: hover, unhover: unhover };
 })();
 
 function MDH_Command(name) {
   MinifyDraftHelper.command(name);
+}
+
+function MDH_Hover(kind) {
+  MinifyDraftHelper.hover(kind);
+}
+
+function MDH_Unhover(kind) {
+  MinifyDraftHelper.unhover(kind);
 }
 
 $.Schedule(0.1, () => MinifyDraftHelper.init());

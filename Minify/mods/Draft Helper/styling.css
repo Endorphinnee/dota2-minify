@@ -14,10 +14,14 @@
   margin-left: 12px;
 }
 
+#MDH_Root.MDH_Free {
+  horizontal-align: left;
+  vertical-align: top;
+  margin: 0px;
+}
+
 #MDH_Window {
   width: 470px;
-  flow-children: down;
-  padding: 6px 8px 8px 8px;
   border-radius: 4px;
   border: 1px solid #ffffff22;
   background-color: #0b0f14e6;
@@ -80,13 +84,64 @@
   font-weight: bold;
 }
 
+#MDH_Content {
+  width: 100%;
+  flow-children: down;
+  padding: 6px 12px 10px 8px;
+}
+
 #MDH_Header {
   width: 100%;
   flow-children: right;
   margin-bottom: 4px;
 }
 
+#MDH_DragArea {
+  width: fill-parent-flow(1);
+  height: 22px;
+  flow-children: right;
+  border-radius: 3px;
+  transition-property: background-color;
+  transition-duration: 0.15s;
+}
+
+#MDH_DragArea:hover {
+  background-color: #ffffff10;
+}
+
+#MDH_EdgeGrip {
+  width: 6px;
+  height: 100%;
+  horizontal-align: right;
+  border-radius: 0px 4px 4px 0px;
+  background-color: #ffffff08;
+  transition-property: background-color;
+  transition-duration: 0.15s;
+}
+
+#MDH_EdgeGrip:hover {
+  background-color: #e8c76a55;
+}
+
+#MDH_ResizeGrip {
+  width: 16px;
+  height: 16px;
+  horizontal-align: right;
+  vertical-align: bottom;
+  border-right: 3px solid #e8c76a66;
+  border-bottom: 3px solid #e8c76a66;
+  border-radius: 0px 0px 4px 0px;
+  transition-property: border-color;
+  transition-duration: 0.15s;
+}
+
+#MDH_ResizeGrip:hover {
+  border-right: 3px solid #e8c76a;
+  border-bottom: 3px solid #e8c76a;
+}
+
 #MDH_Title {
+  margin-left: 4px;
   color: #e8c76a;
   font-size: 16px;
   font-weight: bold;
@@ -100,10 +155,6 @@
   font-size: 12px;
   margin-left: 8px;
   vertical-align: center;
-}
-
-.MDH_Fill {
-  width: fill-parent-flow(1);
 }
 
 .MDH_Btn,
@@ -214,7 +265,7 @@
 }
 
 .MDH_Cell {
-  width: 52px;
+  width: 50px;
   color: #c3ccd5;
   font-size: 13px;
   text-align: right;
