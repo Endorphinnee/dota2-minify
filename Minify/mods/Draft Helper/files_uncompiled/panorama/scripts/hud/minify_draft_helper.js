@@ -13,9 +13,10 @@ var MinifyDraftHelper = (function () {
   const SIZE_TO_SCALE = { 1: 70, 2: 85, 3: 100, 4: 120, 5: 140 };
   const MIN_SCALE = 50;
   const MAX_SCALE = 200;
-  const NORMAL_WIDTH = 470;
-  const WIDE_WIDTH = 650;
-  const MIN_WIDTH = 380;
+  const NORMAL_WIDTH = 520;
+  const WIDE_WIDTH = 780;
+  const WIDE_THRESHOLD = 700;
+  const MIN_WIDTH = 420;
   const MAX_WIDTH = 1000;
   const STATE_ATTRIBUTE = "minify_draft_helper_state";
   const TICK_SECONDS = 0.5;
@@ -23,6 +24,9 @@ var MinifyDraftHelper = (function () {
 
   const DATA = typeof MDH_DATA !== "undefined" ? MDH_DATA : null;
   const CFG = typeof MDH_CONFIG !== "undefined" && MDH_CONFIG ? MDH_CONFIG : {};
+  const ST = DATA && DATA.stratz ? DATA.stratz : null;
+  const DP_SCALE = DATA && DATA.dpScale ? DATA.dpScale : null;
+  const ITEM_SLOTS = 6;
 
   // Strategy-map lane hit boxes, copied from dota_hud_hero_picking_minimap.css (percentages).
   // Lane names are map-absolute; they are turned into safe/off lanes per team later.
@@ -66,7 +70,16 @@ var MinifyDraftHelper = (function () {
       situational: "situational pick",
       vsLine: "vs",
       withLine: "with",
-      tooltipTotal: "Total = vs enemies + with allies (dotapicker advantage index)",
+      tooltipTotal: "Total = vs enemies + with allies, both sources combined (in standard deviations)",
+      wrPos: "WR pos",
+      groupDp: "dotapicker",
+      groupSt: "STRATZ",
+      stMissing: "STRATZ: no data",
+      items: "Items",
+      itemsTitle: "Best items by winrate",
+      itemsNone: "no STRATZ item data",
+      matches: "matches",
+      clickHint: "click a hero to see items",
     },
     russian: {
       title: "Draft Helper",
@@ -93,7 +106,16 @@ var MinifyDraftHelper = (function () {
       situational: "ситуативный пик",
       vsLine: "против",
       withLine: "вместе с",
-      tooltipTotal: "Итог = против врагов + с союзниками (индекс преимущества dotapicker)",
+      tooltipTotal: "Итог = против врагов + с союзниками, оба источника вместе (в стандартных отклонениях)",
+      wrPos: "WR поз.",
+      groupDp: "dotapicker",
+      groupSt: "STRATZ",
+      stMissing: "STRATZ: нет данных",
+      items: "Предметы",
+      itemsTitle: "Лучшие предметы по винрейту",
+      itemsNone: "нет данных STRATZ о предметах",
+      matches: "матчей",
+      clickHint: "нажмите на героя, чтобы увидеть предметы",
     },
   };
 
@@ -113,6 +135,8 @@ var MinifyDraftHelper = (function () {
     collapsed: false,
     hidden: false,
     manualPos: 0,
+    detailHero: 0,
+    itemSlots: [],
     lastSignature: "",
     lastDebug: "",
     rows: [],
@@ -160,8 +184,17 @@ var MinifyDraftHelper = (function () {
     return !!list && list.indexOf(role) !== -1;
   }
 
-  // 2 = natural role, 1 = situational, 0 = not played there
-  function positionFit(h, pos) {
+  // 2 = natural role, 1 = situational, 0 = not played there.
+  // With STRATZ data this uses how often the hero is really played on that position.
+  function positionFit(h, pos, heroIdx) {
+    if (!pos) return 2;
+    if (ST && ST.share[heroIdx]) {
+      const shares = ST.share[heroIdx];
+      if (shares[0] + shares[1] + shares[2] + shares[3] + shares[4] > 0) {
+        const share = shares[pos - 1];
+        return share >= 12 ? 2 : share >= 4 ? 1 : 0;
+      }
+    }
     const r = h.roles || [];
     const c = h.canRoles || [];
     const support = has(r, "RoleSupport") || has(r, "LaneSupport");
@@ -189,6 +222,11 @@ var MinifyDraftHelper = (function () {
   // > 0 means the hero is usually played as a core
   function coreness(h) {
     if (!h) return 0;
+    const idx = heroIndexById[h.id];
+    if (ST && idx !== undefined && ST.share[idx]) {
+      const sh = ST.share[idx];
+      if (sh[0] + sh[1] + sh[2] + sh[3] + sh[4] > 0) return (sh[0] + sh[1] + sh[2] - sh[3] - sh[4]) / 20;
+    }
     const r = h.roles || [];
     let s = 0;
     if (has(r, "Core")) s += 2;
@@ -445,28 +483,46 @@ var MinifyDraftHelper = (function () {
     for (let c = 0; c < n; c++) {
       const h = DATA.heroes[c];
       if (!h.id || taken[h.id]) continue;
-      const fit = positionFit(h, pos);
+      const fit = positionFit(h, pos, c);
       if (fit === 0) continue;
 
       let adv = 0;
       let wvs = 0;
+      let stVs = 0;
       const vsList = [];
       for (let k = 0; k < enemyIdx.length; k++) {
         const e = enemyIdx[k];
         const v = DATA.adv[c * n + e] / 10;
+        const sv = ST ? ST.vs[c * n + e] / 10 : 0;
         adv += v;
+        stVs += sv;
         wvs += DATA.wvs[c * n + e] / 10;
-        vsList.push([e, v]);
+        vsList.push([e, v, sv]);
       }
       let syn = 0;
+      let stWith = 0;
       const withList = [];
       for (let k = 0; k < allyIdx.length; k++) {
         const a = allyIdx[k];
         const v = DATA.syn[c * n + a] / 10;
+        const sv = ST ? ST.with[c * n + a] / 10 : 0;
         syn += v;
-        withList.push([a, v]);
+        stWith += sv;
+        withList.push([a, v, sv]);
       }
-      const total = adv + syn;
+
+      let total;
+      let wrNow = h.wr;
+      if (ST && DP_SCALE) {
+        // Both sources use different units, so each is divided by its typical spread first
+        const dpPart = adv / DP_SCALE.adv + syn / DP_SCALE.syn;
+        const stPart = stVs / ST.scale.vs + stWith / ST.scale.with;
+        total = (dpPart + stPart) / 2;
+        wrNow = stratzWinrate(c, pos) || h.wr;
+      } else {
+        total = adv + syn;
+      }
+      const penalty = ST ? 1 : 2;
       results.push({
         idx: c,
         hero: h,
@@ -474,15 +530,38 @@ var MinifyDraftHelper = (function () {
         adv: adv,
         syn: syn,
         wvs: wvs,
+        stVs: stVs,
+        stWith: stWith,
+        stWr: ST ? stratzWinrate(c, pos) : 0,
         total: total,
         // Situational picks are kept but pushed down a bit
-        rank: total - (fit === 1 ? 2 : 0) + (h.wr - 50) * 0.1,
+        rank: total - (fit === 1 ? penalty : 0) + (wrNow - 50) * 0.1,
         vsList: vsList,
         withList: withList,
       });
     }
     results.sort((a, b) => b.rank - a.rank);
     return results.slice(0, ROWS);
+  }
+
+  // Winrate on the given position (or overall, weighted by how often each position is played)
+  function stratzWinrate(c, pos) {
+    if (!ST || !ST.posWr[c]) return 0;
+    if (pos) return ST.posWr[c][pos - 1] / 10;
+    let games = 0;
+    let wr = 0;
+    for (let p = 0; p < 5; p++) {
+      games += ST.share[c][p];
+      wr += ST.share[c][p] * ST.posWr[c][p];
+    }
+    return games ? wr / games / 10 : 0;
+  }
+
+  function mainPosition(c) {
+    if (!ST || !ST.share[c]) return 0;
+    let best = 0;
+    for (let p = 1; p < 5; p++) if (ST.share[c][p] > ST.share[c][best]) best = p;
+    return ST.share[c][best] > 0 ? best + 1 : 0;
   }
 
   // ------------------------------------------------------------------ UI
@@ -528,21 +607,36 @@ var MinifyDraftHelper = (function () {
     const list = el("MDH_List");
     if (!list || state.rows.length > 0) return;
 
+    // Source groups above the column names
+    const groups = createPanel("Panel", list, "MDH_GroupRow");
+    groups.AddClass("MDH_Row");
+    groups.AddClass("MDH_HeaderRow");
+    groups.AddClass("MDH_GroupRow");
+    label(groups, "MDH_IconSpacer", "");
+    label(groups, "MDH_Name", "");
+    label(groups, "MDH_Cell", "");
+    label(groups, "MDH_Group MDH_Group2 MDH_SrcDp", T.groupDp);
+    label(groups, "MDH_Group MDH_Group3 MDH_SrcSt", ST ? T.groupSt : T.stMissing);
+    label(groups, "MDH_Group MDH_Group5 MDH_SrcDp MDH_WideOnly", T.groupDp);
+
     const header = createPanel("Panel", list, "MDH_HeaderRow");
     header.AddClass("MDH_Row");
     header.AddClass("MDH_HeaderRow");
     label(header, "MDH_IconSpacer", "");
-    label(header, "MDH_Name", T.hero + " · dotapicker");
+    label(header, "MDH_Name", T.hero);
     const totalHeader = label(header, "MDH_Cell", T.total);
     totalHeader.SetPanelEvent("onmouseover", () => showTooltip(totalHeader, T.tooltipTotal));
     totalHeader.SetPanelEvent("onmouseout", hideTooltip);
-    label(header, "MDH_Cell", T.vs);
-    label(header, "MDH_Cell", T.with);
-    label(header, "MDH_Cell", T.wrvs);
-    label(header, "MDH_Cell", T.wr);
-    label(header, "MDH_Cell MDH_WideOnly", T.early);
-    label(header, "MDH_Cell MDH_WideOnly", T.mid);
-    label(header, "MDH_Cell MDH_WideOnly", T.late);
+    label(header, "MDH_Cell MDH_SrcDp", T.vs);
+    label(header, "MDH_Cell MDH_SrcDp", T.with);
+    label(header, "MDH_Cell MDH_SrcSt", T.vs);
+    label(header, "MDH_Cell MDH_SrcSt", T.with);
+    label(header, "MDH_Cell MDH_SrcSt", T.wrPos);
+    label(header, "MDH_Cell MDH_SrcDp MDH_WideOnly", T.wrvs);
+    label(header, "MDH_Cell MDH_SrcDp MDH_WideOnly", T.wr);
+    label(header, "MDH_Cell MDH_SrcDp MDH_WideOnly", T.early);
+    label(header, "MDH_Cell MDH_SrcDp MDH_WideOnly", T.mid);
+    label(header, "MDH_Cell MDH_SrcDp MDH_WideOnly", T.late);
 
     for (let i = 0; i < ROWS; i++) {
       const row = createPanel("Panel", list, "MDH_Row" + i);
@@ -558,17 +652,26 @@ var MinifyDraftHelper = (function () {
         total: label(row, "MDH_Cell MDH_Total", ""),
         adv: label(row, "MDH_Cell", ""),
         syn: label(row, "MDH_Cell", ""),
-        wvs: label(row, "MDH_Cell", ""),
-        wr: label(row, "MDH_Cell", ""),
+        stVs: label(row, "MDH_Cell", ""),
+        stWith: label(row, "MDH_Cell", ""),
+        stWr: label(row, "MDH_Cell", ""),
+        wvs: label(row, "MDH_Cell MDH_WideOnly", ""),
+        wr: label(row, "MDH_Cell MDH_WideOnly", ""),
         early: label(row, "MDH_Cell MDH_WideOnly", ""),
         mid: label(row, "MDH_Cell MDH_WideOnly", ""),
         late: label(row, "MDH_Cell MDH_WideOnly", ""),
       };
-      const entry = { row: row, cells: cells, tooltip: "" };
+      const entry = { row: row, cells: cells, tooltip: "", heroId: 0 };
       row.SetPanelEvent("onmouseover", () => {
         if (entry.tooltip) showTooltip(row, entry.tooltip);
       });
       row.SetPanelEvent("onmouseout", hideTooltip);
+      row.SetPanelEvent("onactivate", () => {
+        state.detailHero = state.detailHero === entry.heroId ? 0 : entry.heroId;
+        try {
+          update(true);
+        } catch (e) {}
+      });
       state.rows.push(entry);
     }
   }
@@ -579,13 +682,27 @@ var MinifyDraftHelper = (function () {
     lbl.SetHasClass("MDH_Bad", value < -0.05);
   }
 
+  function setWinrate(lbl, wr) {
+    lbl.text = wr ? wr.toFixed(1) + "%" : "—";
+    lbl.SetHasClass("MDH_Good", wr >= 51);
+    lbl.SetHasClass("MDH_Bad", wr > 0 && wr <= 49);
+  }
+
   function tooltipFor(r) {
     const lines = [heroDisplayName(r.hero) + (r.fit === 1 ? " (" + T.situational + ")" : "")];
     const part = (list) =>
       list
         .slice()
-        .sort((a, b) => b[1] - a[1])
-        .map((p) => heroDisplayName(DATA.heroes[p[0]]) + " " + fmt(p[1]))
+        .sort((a, b) => b[1] + b[2] - a[1] - a[2])
+        .map(
+          (p) =>
+            heroDisplayName(DATA.heroes[p[0]]) +
+            " " +
+            T.groupDp +
+            " " +
+            fmt(p[1]) +
+            (ST ? " / " + T.groupSt + " " + fmt(p[2]) + "%" : ""),
+        )
         .join(", ");
     if (r.vsList.length) lines.push(T.vsLine + ": " + part(r.vsList));
     if (r.withList.length) lines.push(T.withLine + ": " + part(r.withList));
@@ -608,17 +725,95 @@ var MinifyDraftHelper = (function () {
         } catch (e2) {}
       }
       c.name.text = heroDisplayName(r.hero) + (r.fit === 1 ? "*" : "");
+      entry.heroId = r.hero.id;
+      entry.row.SetHasClass("MDH_Selected", state.detailHero === r.hero.id);
       setValue(c.total, r.total);
       setValue(c.adv, r.adv);
       setValue(c.syn, r.syn);
+      if (ST) {
+        setValue(c.stVs, r.stVs);
+        setValue(c.stWith, r.stWith);
+        setWinrate(c.stWr, r.stWr);
+      } else {
+        [c.stVs, c.stWith, c.stWr].forEach((l) => {
+          l.text = "—";
+          l.SetHasClass("MDH_Good", false);
+          l.SetHasClass("MDH_Bad", false);
+        });
+      }
       setValue(c.wvs, r.wvs);
-      c.wr.text = r.hero.wr.toFixed(1) + "%";
-      c.wr.SetHasClass("MDH_Good", r.hero.wr >= 51);
-      c.wr.SetHasClass("MDH_Bad", r.hero.wr <= 49);
+      setWinrate(c.wr, r.hero.wr);
       setValue(c.early, r.hero.stage[0]);
       setValue(c.mid, r.hero.stage[1]);
       setValue(c.late, r.hero.stage[2]);
       entry.tooltip = tooltipFor(r);
+    }
+  }
+
+  function itemDisplayName(name) {
+    try {
+      const loc = $.Localize("#DOTA_Tooltip_ability_" + name);
+      if (loc && loc.charAt(0) !== "#" && loc.indexOf("DOTA_Tooltip") === -1) return loc;
+    } catch (e) {}
+    return name.replace("item_", "").replace(/_/g, " ");
+  }
+
+  function renderItems(results, draft, pos) {
+    const box = el("MDH_ItemsBox");
+    const list = el("MDH_ItemsList");
+    const title = el("MDH_ItemsTitle");
+    if (!box || !list || !title) return;
+    if (!ST) {
+      box.visible = false;
+      return;
+    }
+    box.visible = true;
+    if (state.itemSlots.length === 0) {
+      for (let i = 0; i < ITEM_SLOTS; i++) {
+        const slot = createPanel("Panel", list, "MDH_Item" + i);
+        slot.AddClass("MDH_ItemSlot");
+        const img = createPanel("DOTAItemImage", slot, "", { scaling: "stretch-to-fit-y-preserve-aspect" });
+        img.AddClass("MDH_ItemImage");
+        const wr = label(slot, "MDH_ItemWr", "");
+        const entry = { slot: slot, img: img, wr: wr, tooltip: "" };
+        slot.SetPanelEvent("onmouseover", () => {
+          if (entry.tooltip) showTooltip(slot, entry.tooltip);
+        });
+        slot.SetPanelEvent("onmouseout", hideTooltip);
+        state.itemSlots.push(entry);
+      }
+    }
+
+    // Hero for the item list: the clicked row, else your own pick, else the top suggestion
+    const me = draft.allies.filter((a) => a.local)[0];
+    let heroId = state.detailHero || (me && me.hero) || (results[0] ? results[0].hero.id : 0);
+    const c = heroIndexById[heroId];
+    let itemPos = pos;
+    let items = c !== undefined && pos ? ST.items[heroId + ":" + pos] : null;
+    if (!items && c !== undefined) {
+      itemPos = mainPosition(c);
+      items = ST.items[heroId + ":" + itemPos];
+    }
+    const heroName = c !== undefined ? heroDisplayName(DATA.heroes[c]) : "";
+    title.text =
+      T.itemsTitle +
+      (heroName ? " · " + heroName + (itemPos ? " · " + T.pos + " " + itemPos : "") : "") +
+      (items ? "" : " — " + T.itemsNone) +
+      (state.detailHero ? "" : "  (" + T.clickHint + ")");
+
+    for (let i = 0; i < state.itemSlots.length; i++) {
+      const entry = state.itemSlots[i];
+      const item = items ? items[i] : null;
+      entry.slot.visible = !!item;
+      if (!item) continue;
+      try {
+        entry.img.itemname = item[0];
+      } catch (e) {}
+      const wr = item[1] / 10;
+      entry.wr.text = wr.toFixed(1) + "%";
+      entry.wr.SetHasClass("MDH_Good", wr >= 52);
+      entry.wr.SetHasClass("MDH_Bad", wr < 48);
+      entry.tooltip = itemDisplayName(item[0]) + "\nWR " + wr.toFixed(1) + "% · " + item[2] + " " + T.matches;
     }
   }
 
@@ -648,7 +843,7 @@ var MinifyDraftHelper = (function () {
     try {
       win.style.width = state.width + "px";
     } catch (e) {}
-    root.SetHasClass("MDH_Wide", state.width >= 600);
+    root.SetHasClass("MDH_Wide", state.width >= WIDE_THRESHOLD);
     root.SetHasClass("MDH_Free", state.free);
     if (state.free) {
       try {
@@ -747,12 +942,20 @@ var MinifyDraftHelper = (function () {
     const autoPos = mine && mine.pos ? mine.pos : 0;
     const pos = state.manualPos || autoPos;
 
-    const signature = JSON.stringify([draft, icons.map((i) => [i.hero, i.lane]), pos, state.manualPos]);
+    const signature = JSON.stringify([
+      draft,
+      icons.map((i) => [i.hero, i.lane]),
+      pos,
+      state.manualPos,
+      state.detailHero,
+    ]);
     updateDebug(draft, icons, positions);
     if (!force && signature === state.lastSignature) return;
     state.lastSignature = signature;
 
-    renderRows(recommend(draft, pos));
+    const results = recommend(draft, pos);
+    renderRows(results);
+    renderItems(results, draft, pos);
 
     const enemiesPicked = draft.enemies.filter((e) => e.hero).length;
     const alliesPicked = draft.allies.filter((a) => a.hero && !a.local).length;
@@ -766,6 +969,8 @@ var MinifyDraftHelper = (function () {
     let status =
       "dotapicker " +
       DATA.patch +
+      " · " +
+      (ST ? "STRATZ " + (CFG.stratzBracket || "") : T.stMissing) +
       " · " +
       (CFG.bracketName || "") +
       " · " +
@@ -935,7 +1140,7 @@ var MinifyDraftHelper = (function () {
   function command(name) {
     if (name === "bigger") state.scale = clamp(state.scale + 10, MIN_SCALE, MAX_SCALE);
     else if (name === "smaller") state.scale = clamp(state.scale - 10, MIN_SCALE, MAX_SCALE);
-    else if (name === "wide") state.width = state.width >= 600 ? NORMAL_WIDTH : WIDE_WIDTH;
+    else if (name === "wide") state.width = state.width >= WIDE_THRESHOLD ? NORMAL_WIDTH : WIDE_WIDTH;
     else if (name === "dock") state.free = false;
     else if (name === "collapse") state.collapsed = !state.collapsed;
     else if (name === "hide") state.hidden = true;

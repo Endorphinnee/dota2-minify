@@ -40,7 +40,7 @@ def main():
     settings = get_settings()
     move_token_out_of_config(settings)
     try:
-        status, dataset = draft_helper_core.generate(settings, refresh=True)
+        status, stratz_status, dataset = draft_helper_core.generate(settings, refresh=True, log=log.write_warning)
     except Exception as e:
         # Never break the patch because of this mod
         log.write_warning(f"[Draft Helper] failed to prepare data: {e}")
@@ -52,6 +52,13 @@ def main():
         output.add_text("Draft Helper: dotapicker unreachable, using cached data", msg_type="warning", indent=True)
     else:
         output.add_text("Draft Helper: no hero data available (offline?)", msg_type="warning", indent=True)
+
+    if stratz_status == "fresh":
+        output.add_text("Draft Helper: STRATZ data updated", msg_type="success", indent=True)
+    elif stratz_status == "cached":
+        output.add_text("Draft Helper: STRATZ data from cache (refreshed every 12h)", indent=True)
+    elif stratz.load_token():
+        output.add_text("Draft Helper: STRATZ data unavailable, see logs/warnings.txt", msg_type="warning", indent=True)
 
 
 if __name__ == "__main__":

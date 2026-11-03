@@ -16,8 +16,18 @@ DOTAPICKER_BASE = "https://dotapicker.com/assets/json/data/"
 DOTAPICKER_FILES = ("heroinfo", "heroadvscores", "herowinscores", "herotimeadv")
 USER_AGENT = "dota2-minify (Draft Helper mod)"
 
-# dotapicker's "skilllevels": index 0 = Very High, 1 = High, 2 = Normal
-BRACKETS = {"Very High": 0, "High": 1, "Normal": 2}
+# Rank setting -> (dotapicker "skilllevels" index, STRATZ RankBracketBasicEnum).
+# dotapicker only has Very High / High / Normal. The old setting values are kept for configs saved before.
+BRACKETS = {
+    "Herald-Guardian": (2, "HERALD_GUARDIAN"),
+    "Crusader-Archon": (2, "CRUSADER_ARCHON"),
+    "Legend-Ancient": (1, "LEGEND_ANCIENT"),
+    "Divine-Immortal": (0, "DIVINE_IMMORTAL"),
+    "Very High": (0, "DIVINE_IMMORTAL"),
+    "High": (1, "LEGEND_ANCIENT"),
+    "Normal": (2, "CRUSADER_ARCHON"),
+}
+DEFAULT_BRACKET = "Legend-Ancient"
 HOTKEYS = ("None", "F5", "F6", "F7", "F8", "F9", "F10", "F11", "F12", "Insert", "Home", "PageUp", "PageDown")
 
 mod_dir = os.path.dirname(os.path.abspath(__file__))
@@ -180,14 +190,17 @@ def build_dataset(raw, bracket):
 
 
 def build_config(settings):
-    bracket_name = settings.get("bracket", "Very High")
+    bracket_name = settings.get("bracket", DEFAULT_BRACKET)
+    if bracket_name not in BRACKETS:
+        bracket_name = DEFAULT_BRACKET
     hotkey = settings.get("hotkey", "F8")
     try:
         size = int(settings.get("default_size", 3))
     except (TypeError, ValueError):
         size = 3
     return {
-        "bracket": BRACKETS.get(bracket_name, 0),
+        "bracket": BRACKETS[bracket_name][0],
+        "stratzBracket": BRACKETS[bracket_name][1],
         "bracketName": bracket_name,
         "hotkey": hotkey if hotkey in HOTKEYS else "None",
         "globalBind": bool(settings.get("global_bind", False)),
@@ -207,11 +220,14 @@ def write_data_js(dataset, config, path=data_js_path):
         file.write("var MDH_DATA = " + json.dumps(dataset, separators=(",", ":"), ensure_ascii=False) + ";\n")
 
 
-def generate(settings, refresh=True):
+def generate(settings, refresh=True, force_stratz=False, log=None):
     """
     Entry point used by script.py / script_utility.py.
-    Returns (status, dataset) where status is "fresh", "cached" or "missing".
+    Returns (status, stratz_status, dataset); statuses are "fresh", "cached" or "missing".
+    STRATZ data is optional: it needs a token and is cached for 12 hours.
     """
+    import stratz
+
     config = build_config(settings)
     status = "fresh" if refresh and fetch_dotapicker() else "cached"
     raw = load_cached()
@@ -223,5 +239,33 @@ def generate(settings, refresh=True):
             dataset = None
     if dataset is None:
         status = "missing"
+
+    stratz_status = "missing"
+    if dataset is not None:
+        try:
+            hero_ids = [h["id"] for h in dataset["heroes"] if h["id"]]
+            stratz_status, stratz_raw = stratz.refresh(
+                stratz.load_token(), config["stratzBracket"], hero_ids, cache_dir, force=force_stratz, log=log
+            )
+            if stratz_raw:
+                dataset["stratz"] = stratz.build_section(stratz_raw, dataset["heroes"])
+                dataset["dpScale"] = {
+                    "adv": round(_std_flat(dataset["adv"]), 3),
+                    "syn": round(_std_flat(dataset["syn"]), 3),
+                }
+        except Exception as e:
+            stratz_status = "missing"
+            if log:
+                log(f"[Draft Helper] STRATZ data skipped: {e}")
+
     write_data_js(dataset, config)
-    return status, dataset
+    return status, stratz_status, dataset
+
+
+def _std_flat(values):
+    """Standard deviation of the non-zero values of a x10 matrix, in real units."""
+    values = [v / 10 for v in values if v]
+    if len(values) < 2:
+        return 1.0
+    m = sum(values) / len(values)
+    return (sum((v - m) ** 2 for v in values) / len(values)) ** 0.5 or 1.0

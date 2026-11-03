@@ -2,10 +2,10 @@
   "settings": [
     {
       "key": "bracket",
-      "text": "Skill bracket (dotapicker)",
+      "text": "Rank (STRATZ / dotapicker)",
       "type": "combo",
-      "default": "High",
-      "items": ["Very High", "High", "Normal"]
+      "default": "Legend-Ancient",
+      "items": ["Herald-Guardian", "Crusader-Archon", "Legend-Ancient", "Divine-Immortal"]
     },
     {
       "key": "auto_position",
