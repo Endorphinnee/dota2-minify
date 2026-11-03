@@ -80,6 +80,7 @@ var MinifyDraftHelper = (function () {
       itemsNone: "no STRATZ item data",
       matches: "matches",
       clickHint: "click a hero to see items",
+      noToken: "no token",
     },
     russian: {
       title: "Draft Helper",
@@ -116,6 +117,7 @@ var MinifyDraftHelper = (function () {
       itemsNone: "нет данных STRATZ о предметах",
       matches: "матчей",
       clickHint: "нажмите на героя, чтобы увидеть предметы",
+      noToken: "нет токена",
     },
   };
 
@@ -817,6 +819,13 @@ var MinifyDraftHelper = (function () {
     }
   }
 
+  function stratzStatusText() {
+    if (ST) return "STRATZ " + (CFG.stratzBracket || "");
+    if (CFG.stratzError) return T.stMissing + " (" + CFG.stratzError + ")";
+    if (!CFG.stratzToken) return T.stMissing + " (" + T.noToken + ")";
+    return T.stMissing;
+  }
+
   function setStatus(text) {
     const s = el("MDH_Status");
     if (s) s.text = text;
@@ -970,7 +979,7 @@ var MinifyDraftHelper = (function () {
       "dotapicker " +
       DATA.patch +
       " · " +
-      (ST ? "STRATZ " + (CFG.stratzBracket || "") : T.stMissing) +
+      stratzStatusText() +
       " · " +
       (CFG.bracketName || "") +
       " · " +

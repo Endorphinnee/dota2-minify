@@ -226,9 +226,16 @@ def generate(settings, refresh=True, force_stratz=False, log=None):
     Returns (status, stratz_status, dataset); statuses are "fresh", "cached" or "missing".
     STRATZ data is optional: it needs a token and is cached for 12 hours.
     """
-    import stratz
+    import draft_helper_stratz as stratz
 
     config = build_config(settings)
+    errors = []
+
+    def remember(message):
+        errors.append(message)
+        if log:
+            log(message)
+
     status = "fresh" if refresh and fetch_dotapicker() else "cached"
     raw = load_cached()
     dataset = None
@@ -244,8 +251,10 @@ def generate(settings, refresh=True, force_stratz=False, log=None):
     if dataset is not None:
         try:
             hero_ids = [h["id"] for h in dataset["heroes"] if h["id"]]
+            token = stratz.load_token()
+            config["stratzToken"] = bool(token)
             stratz_status, stratz_raw = stratz.refresh(
-                stratz.load_token(), config["stratzBracket"], hero_ids, cache_dir, force=force_stratz, log=log
+                token, config["stratzBracket"], hero_ids, cache_dir, force=force_stratz, log=remember
             )
             if stratz_raw:
                 dataset["stratz"] = stratz.build_section(stratz_raw, dataset["heroes"])
@@ -255,9 +264,11 @@ def generate(settings, refresh=True, force_stratz=False, log=None):
                 }
         except Exception as e:
             stratz_status = "missing"
-            if log:
-                log(f"[Draft Helper] STRATZ data skipped: {e}")
+            remember(f"[Draft Helper] STRATZ data skipped: {type(e).__name__}: {e}")
 
+    if errors:
+        # Shown in the in-game panel so problems are visible without digging through logs
+        config["stratzError"] = errors[-1].replace("[Draft Helper] ", "")[:160]
     write_data_js(dataset, config)
     return status, stratz_status, dataset
 

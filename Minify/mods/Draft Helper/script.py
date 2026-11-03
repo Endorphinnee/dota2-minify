@@ -13,8 +13,14 @@ if current_dir not in sys.path:
 
 # isort: split
 
+import importlib
+
 import draft_helper_core
-import stratz
+import draft_helper_stratz as stratz
+
+# Minify keeps imported modules for its whole session; reload so an updated mod is used without a restart
+importlib.reload(stratz)
+importlib.reload(draft_helper_core)
 from core import config, log, output
 from patch import manifest_utils
 

@@ -13,8 +13,14 @@ if current_dir not in sys.path:
 
 # isort: split
 
+import importlib
+
 import draft_helper_core
-import stratz
+import draft_helper_stratz as stratz
+
+# Minify keeps imported modules for its whole session; reload so an updated mod is used without a restart
+importlib.reload(stratz)
+importlib.reload(draft_helper_core)
 from core import base, config, log, output
 from patch import manifest_utils
 
@@ -88,3 +94,19 @@ def check_stratz():
         f"Draft Helper: STRATZ check {'OK' if ok else 'failed'}, report: {report_path}",
         msg_type="success" if ok else "error",
     )
+    if not ok:
+        output.add_text(lines[0], msg_type="error")
+        return
+
+    output.add_text("Draft Helper: downloading STRATZ data (about a minute)...")
+    try:
+        _, stratz_status, _ = draft_helper_core.generate(
+            settings, refresh=False, force_stratz=True, log=log.write_warning
+        )
+    except Exception as e:
+        log.write_warning(f"[Draft Helper] STRATZ download failed: {type(e).__name__}: {e}")
+        stratz_status = "missing"
+    if stratz_status == "fresh":
+        output.add_text("Draft Helper: STRATZ data downloaded. Patch to put it into the game.", msg_type="success")
+    else:
+        output.add_text("Draft Helper: STRATZ download failed, see logs/warnings.txt", msg_type="error")
