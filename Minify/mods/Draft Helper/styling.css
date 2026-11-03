@@ -218,8 +218,8 @@
   margin-bottom: 4px;
 }
 
-#MDH_List {
-  width: 100%;
+#MDH_List,
+#MDH_List2 {
   flow-children: down;
 }
 
