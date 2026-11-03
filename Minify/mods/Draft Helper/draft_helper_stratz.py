@@ -158,15 +158,23 @@ class StratzError(Exception):
     pass
 
 
+RETRY_STATUSES = (429, 500, 502, 503, 504)
+RETRY_WAITS = (2, 5, 10)
+
+
 def query(token, gql, variables=None):
-    """Runs a GraphQL query and returns `data`, raising StratzError on any problem."""
-    for attempt in range(3):
+    """Runs a GraphQL query and returns `data`, raising StratzError on any problem.
+    Overload / rate limit answers (429, 5xx) are retried with growing pauses."""
+    for attempt in range(len(RETRY_WAITS) + 1):
         try:
             status, payload, text = _post(token, gql, variables, timeout=40)
         except Exception as e:
+            if attempt < len(RETRY_WAITS):
+                time.sleep(RETRY_WAITS[attempt])
+                continue
             raise StratzError(f"{type(e).__name__}: {e}") from e
-        if status == 429 and attempt < 2:
-            time.sleep(3 * (attempt + 1))
+        if status in RETRY_STATUSES and attempt < len(RETRY_WAITS):
+            time.sleep(RETRY_WAITS[attempt])
             continue
         if status != 200:
             message = (payload or {}).get("message") if isinstance(payload, dict) else None
@@ -237,25 +245,65 @@ def fetch_item_names(token):
     return out
 
 
-def fetch_items(token, bracket, pairs, chunk=8):
-    """{"heroId:pos": {itemId: [matches, wins]}} using aliased queries, `chunk` hero/position pairs per request."""
+def first_purchases(rows):
+    """
+    {itemId: [matches, wins]} counting only the first purchase of every item.
+    STRATZ numbers repeated purchases with `instance`; the lowest instance of an
+    item is its first purchase (instances may start at 0 or 1).
+    """
+    lowest = {}
+    for r in rows or []:
+        if r.get("itemId") is None:
+            continue
+        inst = r.get("instance") or 0
+        item = int(r["itemId"])
+        lowest[item] = min(lowest.get(item, inst), inst)
     out = {}
-    for i in range(0, len(pairs), chunk):
-        fields = []
-        for hero_id, pos in pairs[i : i + chunk]:
-            fields.append(
-                f"h{hero_id}_{pos}: itemFullPurchase(heroId: {int(hero_id)}, bracketBasicIds: [{bracket}], "
-                f"positionIds: [POSITION_{int(pos)}]) {{ itemId instance matchCount winCount }}"
-            )
-        data = query(token, "{ heroStats { " + " ".join(fields) + " } }")
+    for r in rows or []:
+        if r.get("itemId") is None or (r.get("instance") or 0) != lowest[int(r["itemId"])]:
+            continue
+        cell = out.setdefault(int(r["itemId"]), [0, 0])
+        cell[0] += int(r.get("matchCount") or 0)
+        cell[1] += int(r.get("winCount") or 0)
+    return out
+
+
+def _item_field(hero_id, pos, bracket):
+    return (
+        f"h{int(hero_id)}_{int(pos)}: itemFullPurchase(heroId: {int(hero_id)}, bracketBasicIds: [{bracket}], "
+        f"positionIds: [POSITION_{int(pos)}]) {{ itemId instance matchCount winCount }}"
+    )
+
+
+def fetch_items(token, bracket, pairs, chunk=4, log=None):
+    """
+    {"heroId:pos": {itemId: [matches, wins]}} using aliased queries, `chunk` hero/position pairs per request.
+    A chunk that keeps failing is retried pair by pair, and a pair that still fails is skipped,
+    so one overloaded request does not lose all items.
+    """
+    out = {}
+    failed = 0
+
+    def run(batch):
+        data = query(token, "{ heroStats { " + " ".join(_item_field(h, p, bracket) for h, p in batch) + " } }")
         for alias, rows in (data.get("heroStats") or {}).items():
             hero_id, pos = alias[1:].split("_")
-            first = [r for r in rows or [] if r.get("instance") in (None, 1)] or (rows or [])
-            agg = out.setdefault(f"{hero_id}:{pos}", {})
-            for r in first:
-                cell = agg.setdefault(int(r["itemId"]), [0, 0])
-                cell[0] += int(r.get("matchCount") or 0)
-                cell[1] += int(r.get("winCount") or 0)
+            out[f"{hero_id}:{pos}"] = first_purchases(rows)
+
+    for i in range(0, len(pairs), chunk):
+        batch = pairs[i : i + chunk]
+        try:
+            run(batch)
+        except StratzError:
+            for pair in batch:
+                try:
+                    run([pair])
+                except StratzError as e:
+                    failed += 1
+                    if log and failed <= 3:
+                        log(f"[Draft Helper] STRATZ items skipped for hero {pair[0]} pos {pair[1]}: {e}")
+    if pairs and failed == len(pairs):
+        raise StratzError("all item requests failed")
     return out
 
 
@@ -284,6 +332,15 @@ def refresh(token, bracket, hero_ids, cache_dir, force=False, log=None):
     try:
         positions = fetch_positions(token, bracket)
         matchups = fetch_matchups(token, bracket, hero_ids)
+    except StratzError as e:
+        if log:
+            log(f"[Draft Helper] STRATZ request failed: {e}")
+        return ("cached", cached) if cached else ("missing", None)
+
+    # Items are a bonus: if they fail, keep the matchups and reuse cached items
+    names = (cached or {}).get("itemNames") or {}
+    items = (cached or {}).get("items") or {}
+    try:
         names = fetch_item_names(token)
         pairs = []
         for hero_id, by_pos in positions.items():
@@ -292,7 +349,12 @@ def refresh(token, bracket, hero_ids, cache_dir, force=False, log=None):
             for i, (p, v) in enumerate(ranked[:3]):
                 if i == 0 or v[0] / total >= POSITION_SHARE_FOR_ITEMS:
                     pairs.append((hero_id, p))
-        items = fetch_items(token, bracket, pairs)
+        items = fetch_items(token, bracket, pairs, log=log)
+    except StratzError as e:
+        if log:
+            log(f"[Draft Helper] STRATZ items failed, matchups are still used: {e}")
+
+    try:
         raw = {
             "fetched": int(time.time()),
             "bracket": bracket,
@@ -306,11 +368,10 @@ def refresh(token, bracket, hero_ids, cache_dir, force=False, log=None):
         os.makedirs(cache_dir, exist_ok=True)
         with open(_cache_path(cache_dir, bracket), "w", encoding="utf-8") as file:
             json.dump(raw, file)
-        return "fresh", raw
-    except StratzError as e:
+    except OSError as e:
         if log:
-            log(f"[Draft Helper] STRATZ request failed: {e}")
-        return ("cached", cached) if cached else ("missing", None)
+            log(f"[Draft Helper] could not write the STRATZ cache: {e}")
+    return "fresh", raw
 
 
 # ---------------------------------------------------------------------------
@@ -431,9 +492,15 @@ def check(token, bracket):
         if sample:
             hero = sample[0]
             pos = max(positions[hero].items(), key=lambda kv: kv[1][0])[0]
-            items = fetch_items(token, bracket, [(hero, pos)])
-            rows = items.get(f"{hero}:{pos}", {})
-            lines.append(f"itemFullPurchase hero {hero} pos {pos}: {len(rows)} items")
+            data = query(token, "{ heroStats { " + _item_field(hero, pos, bracket) + " } }")
+            raw_rows = (data.get("heroStats") or {}).get(f"h{hero}_{pos}") or []
+            instances = sorted({r.get("instance") for r in raw_rows if r.get("instance") is not None})
+            lines.append(
+                f"itemFullPurchase hero {hero} pos {pos}: {len(raw_rows)} rows, "
+                f"{len({r.get('itemId') for r in raw_rows})} items, instances {instances[:8]}"
+            )
+            rows = first_purchases(raw_rows)
+            lines.append(f"  first purchases: {len(rows)} items")
             top = sorted(rows.items(), key=lambda kv: kv[1][0], reverse=True)[:5]
             lines.append("  sample: " + ", ".join(f"{names.get(i, ['?'])[0]} {m}/{w}" for i, (m, w) in top))
         lines.insert(0, "STRATZ check: OK")
