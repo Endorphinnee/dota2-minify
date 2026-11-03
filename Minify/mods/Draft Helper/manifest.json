@@ -1,0 +1,58 @@
+{
+  "settings": [
+    {
+      "key": "bracket",
+      "text": "Skill bracket (dotapicker)",
+      "type": "combo",
+      "default": "High",
+      "items": ["Very High", "High", "Normal"]
+    },
+    {
+      "key": "auto_position",
+      "text": "Detect positions from map icons",
+      "type": "checkbox",
+      "default": true
+    },
+    {
+      "key": "hotkey",
+      "text": "Show/hide hotkey",
+      "type": "combo",
+      "default": "F8",
+      "items": ["None", "F5", "F6", "F7", "F8", "F9", "F10", "F11", "F12", "Insert", "Home", "PageUp", "PageDown"]
+    },
+    {
+      "key": "global_bind",
+      "text": "Bind hotkey through Dota (replaces that key's bind)",
+      "type": "checkbox",
+      "default": false
+    },
+    {
+      "key": "default_size",
+      "text": "Default panel size",
+      "type": "slider",
+      "default": 3,
+      "min": 1,
+      "max": 5,
+      "var_type": "int",
+      "step": 1
+    },
+    {
+      "key": "panel_side",
+      "text": "Panel side",
+      "type": "combo",
+      "default": "Right",
+      "items": ["Right", "Left"]
+    },
+    {
+      "key": "debug",
+      "text": "Debug output (minimap dump)",
+      "type": "checkbox",
+      "default": false
+    },
+    {
+      "key": "fetch_draft_data",
+      "text": "Download hero data now",
+      "type": "button"
+    }
+  ]
+}

@@ -1,0 +1,44 @@
+import os
+import sys
+
+current_dir = os.path.dirname(os.path.abspath(__file__))
+minify_root = os.path.abspath(os.path.join(current_dir, os.pardir, os.pardir))
+if os.getcwd() != minify_root:
+    os.chdir(minify_root)
+
+if minify_root not in sys.path:
+    sys.path.insert(0, minify_root)
+if current_dir not in sys.path:
+    sys.path.insert(0, current_dir)
+
+# isort: split
+
+import draft_helper_core
+from core import config, log, output
+from patch import manifest_utils
+
+mod_name = os.path.basename(current_dir)
+
+
+def get_settings():
+    return manifest_utils.get_effective_settings(manifest_utils.get_mod(current_dir), config.get_mod(mod_name))
+
+
+def main():
+    try:
+        status, dataset = draft_helper_core.generate(get_settings(), refresh=True)
+    except Exception as e:
+        # Never break the patch because of this mod
+        log.write_warning(f"[Draft Helper] failed to prepare data: {e}")
+        return
+
+    if status == "fresh":
+        output.add_text(f"Draft Helper: dotapicker {dataset['patch']} data updated", msg_type="success", indent=True)
+    elif status == "cached":
+        output.add_text("Draft Helper: dotapicker unreachable, using cached data", msg_type="warning", indent=True)
+    else:
+        output.add_text("Draft Helper: no hero data available (offline?)", msg_type="warning", indent=True)
+
+
+if __name__ == "__main__":
+    main()

@@ -38,6 +38,7 @@ steam_appid.txt
 !Minify/mods/Custom Fonts
 !Minify/mods/Custom Hero Grids
 !Minify/mods/Dark Terrain
+!Minify/mods/Draft Helper
 !Minify/mods/Minify Base Attacks
 !Minify/mods/Minify Spells & Items
 !Minify/mods/Misc Optimization
@@ -72,6 +73,8 @@ Minify/mods/Custom Background Image/*.webp
 Minify/mods/Custom Background Video/*.mp4
 Minify/mods/Custom Background Video/*.webm
 Minify/mods/Custom Background Video/video_success
+Minify/mods/Draft Helper/cache/
+Minify/mods/Draft Helper/files_uncompiled/panorama/scripts/hud/minify_draft_helper_data.js
 
 # Official Plug-ins & themes
 !Minify/plugins/__init__.py

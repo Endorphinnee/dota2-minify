@@ -1,0 +1,253 @@
+/* g:panorama/styles/hud/dota_hud_pregame */
+#MDH_Root {
+  horizontal-align: right;
+  vertical-align: top;
+  margin-top: 96px;
+  margin-right: 12px;
+  flow-children: down;
+  z-index: 50;
+}
+
+#MDH_Root.MDH_Left {
+  horizontal-align: left;
+  margin-right: 0;
+  margin-left: 12px;
+}
+
+#MDH_Window {
+  width: 470px;
+  flow-children: down;
+  padding: 6px 8px 8px 8px;
+  border-radius: 4px;
+  border: 1px solid #ffffff22;
+  background-color: #0b0f14e6;
+  box-shadow: #000000aa 0px 0px 8px 0px;
+  transform-origin: 100% 0%;
+}
+
+.MDH_Left #MDH_Window {
+  transform-origin: 0% 0%;
+}
+
+.MDH_Size1 #MDH_Window {
+  ui-scale: 70%;
+}
+
+.MDH_Size2 #MDH_Window {
+  ui-scale: 85%;
+}
+
+.MDH_Size3 #MDH_Window {
+  ui-scale: 100%;
+}
+
+.MDH_Size4 #MDH_Window {
+  ui-scale: 120%;
+}
+
+.MDH_Size5 #MDH_Window {
+  ui-scale: 140%;
+}
+
+.MDH_Wide #MDH_Window {
+  width: 650px;
+}
+
+.MDH_Hidden #MDH_Window {
+  visibility: collapse;
+}
+
+#MDH_ShowTab {
+  visibility: collapse;
+  horizontal-align: right;
+  padding: 4px 8px;
+  border-radius: 4px;
+  background-color: #0b0f14e6;
+  border: 1px solid #ffffff33;
+}
+
+.MDH_Left #MDH_ShowTab {
+  horizontal-align: left;
+}
+
+.MDH_Hidden #MDH_ShowTab {
+  visibility: visible;
+}
+
+#MDH_ShowTab Label {
+  color: #e8c76a;
+  font-size: 14px;
+  font-weight: bold;
+}
+
+#MDH_Header {
+  width: 100%;
+  flow-children: right;
+  margin-bottom: 4px;
+}
+
+#MDH_Title {
+  color: #e8c76a;
+  font-size: 16px;
+  font-weight: bold;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  vertical-align: center;
+}
+
+#MDH_HotkeyHint {
+  color: #8a96a3;
+  font-size: 12px;
+  margin-left: 8px;
+  vertical-align: center;
+}
+
+.MDH_Fill {
+  width: fill-parent-flow(1);
+}
+
+.MDH_Btn,
+.MDH_PosBtn {
+  min-width: 24px;
+  height: 22px;
+  margin-left: 3px;
+  padding: 0px 5px;
+  border-radius: 3px;
+  background-color: #ffffff14;
+  transition-property: background-color;
+  transition-duration: 0.15s;
+}
+
+.MDH_Btn:hover,
+.MDH_PosBtn:hover {
+  background-color: #ffffff30;
+}
+
+.MDH_Btn Label,
+.MDH_PosBtn Label {
+  color: #d6dde4;
+  font-size: 14px;
+  horizontal-align: center;
+  vertical-align: center;
+}
+
+.MDH_PosBtn.MDH_Active {
+  background-color: #b8862a;
+}
+
+.MDH_PosBtn.MDH_Active Label {
+  color: #ffffff;
+}
+
+.MDH_Collapsed #MDH_Body {
+  visibility: collapse;
+}
+
+#MDH_Body {
+  width: 100%;
+  flow-children: down;
+}
+
+#MDH_PosRow {
+  flow-children: right;
+  margin-bottom: 4px;
+}
+
+.MDH_PosLabel {
+  color: #8a96a3;
+  font-size: 13px;
+  vertical-align: center;
+  margin-right: 2px;
+}
+
+#MDH_Status {
+  width: 100%;
+  color: #9fb0bf;
+  font-size: 12px;
+  margin-bottom: 4px;
+}
+
+#MDH_List {
+  width: 100%;
+  flow-children: down;
+}
+
+.MDH_Row {
+  width: 100%;
+  height: 30px;
+  flow-children: right;
+  margin-bottom: 2px;
+  border-radius: 2px;
+  background-color: #ffffff08;
+}
+
+.MDH_Row:hover {
+  background-color: #ffffff1c;
+}
+
+.MDH_HeaderRow,
+.MDH_HeaderRow:hover {
+  height: 20px;
+  background-color: #00000000;
+}
+
+.MDH_HeaderRow Label {
+  color: #8a96a3;
+  font-size: 12px;
+}
+
+.MDH_Icon,
+.MDH_IconSpacer {
+  width: 48px;
+  height: 27px;
+  margin: 1px 4px 0px 2px;
+  vertical-align: center;
+}
+
+.MDH_Name {
+  width: fill-parent-flow(1);
+  color: #e6edf3;
+  font-size: 14px;
+  vertical-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.MDH_Cell {
+  width: 52px;
+  color: #c3ccd5;
+  font-size: 13px;
+  text-align: right;
+  vertical-align: center;
+  margin-right: 4px;
+}
+
+.MDH_Total {
+  font-weight: bold;
+  color: #ffffff;
+}
+
+.MDH_WideOnly {
+  visibility: collapse;
+}
+
+.MDH_Wide .MDH_WideOnly {
+  visibility: visible;
+}
+
+.MDH_Good {
+  color: #7fd36b;
+}
+
+.MDH_Bad {
+  color: #e8695a;
+}
+
+#MDH_Debug {
+  width: 100%;
+  height: 220px;
+  margin-top: 6px;
+  font-size: 10px;
+  color: #c3ccd5;
+  background-color: #000000aa;
+}
