@@ -208,6 +208,7 @@ def build_config(settings):
         "side": "left" if settings.get("panel_side") == "Left" else "right",
         "debug": bool(settings.get("debug", False)),
         "autoPosition": bool(settings.get("auto_position", True)),
+        "split": bool(settings.get("split_view", False)),
     }
 
 

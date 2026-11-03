@@ -16,8 +16,10 @@ var MinifyDraftHelper = (function () {
   const NORMAL_WIDTH = 520;
   const WIDE_WIDTH = 780;
   const WIDE_THRESHOLD = 700;
+  const SPLIT_WIDTH = 900;
+  const SPLIT_WIDE_THRESHOLD = 1150;
   const MIN_WIDTH = 420;
-  const MAX_WIDTH = 1000;
+  const MAX_WIDTH = 1400;
   const STATE_ATTRIBUTE = "minify_draft_helper_state";
   const TICK_SECONDS = 0.5;
   const COMMAND_NAME = "minify_draft_helper_toggle";
@@ -81,6 +83,7 @@ var MinifyDraftHelper = (function () {
       matches: "matches",
       clickHint: "click a hero to see items",
       noToken: "no token",
+      tooltipTotalOne: "Total = vs enemies + with allies, this source only",
     },
     russian: {
       title: "Draft Helper",
@@ -118,6 +121,7 @@ var MinifyDraftHelper = (function () {
       matches: "матчей",
       clickHint: "нажмите на героя, чтобы увидеть предметы",
       noToken: "нет токена",
+      tooltipTotalOne: "Итог = против врагов + с союзниками, только этот источник",
     },
   };
 
@@ -139,6 +143,8 @@ var MinifyDraftHelper = (function () {
     manualPos: 0,
     detailHero: 0,
     itemSlots: [],
+    split: !!CFG.split,
+    tables: {},
     lastSignature: "",
     lastDebug: "",
     rows: [],
@@ -188,9 +194,9 @@ var MinifyDraftHelper = (function () {
 
   // 2 = natural role, 1 = situational, 0 = not played there.
   // With STRATZ data this uses how often the hero is really played on that position.
-  function positionFit(h, pos, heroIdx) {
+  function positionFit(h, pos, heroIdx, source) {
     if (!pos) return 2;
-    if (ST && ST.share[heroIdx]) {
+    if (ST && source !== "dp" && ST.share[heroIdx]) {
       const shares = ST.share[heroIdx];
       if (shares[0] + shares[1] + shares[2] + shares[3] + shares[4] > 0) {
         const share = shares[pos - 1];
@@ -465,7 +471,8 @@ var MinifyDraftHelper = (function () {
 
   // ------------------------------------------------------------------ scoring
 
-  function recommend(draft, pos) {
+  // source: "all" (both sources combined), "dp" (dotapicker only) or "st" (STRATZ only)
+  function recommend(draft, pos, source) {
     const n = DATA.n;
     const taken = {};
     const allyIdx = [];
@@ -485,7 +492,7 @@ var MinifyDraftHelper = (function () {
     for (let c = 0; c < n; c++) {
       const h = DATA.heroes[c];
       if (!h.id || taken[h.id]) continue;
-      const fit = positionFit(h, pos, c);
+      const fit = positionFit(h, pos, c, source);
       if (fit === 0) continue;
 
       let adv = 0;
@@ -515,7 +522,15 @@ var MinifyDraftHelper = (function () {
 
       let total;
       let wrNow = h.wr;
-      if (ST && DP_SCALE) {
+      let penalty = ST ? 1 : 2;
+      if (source === "dp") {
+        total = adv + syn;
+        penalty = 2;
+      } else if (source === "st") {
+        total = stVs + stWith;
+        wrNow = stratzWinrate(c, pos) || 50;
+        penalty = 1;
+      } else if (ST && DP_SCALE) {
         // Both sources use different units, so each is divided by its typical spread first
         const dpPart = adv / DP_SCALE.adv + syn / DP_SCALE.syn;
         const stPart = stVs / ST.scale.vs + stWith / ST.scale.with;
@@ -524,7 +539,6 @@ var MinifyDraftHelper = (function () {
       } else {
         total = adv + syn;
       }
-      const penalty = ST ? 1 : 2;
       results.push({
         idx: c,
         hero: h,
@@ -605,64 +619,127 @@ var MinifyDraftHelper = (function () {
     } catch (e) {}
   }
 
-  function buildTable() {
-    const list = el("MDH_List");
-    if (!list || state.rows.length > 0) return;
+  // Column sets: "all" = both sources in one list, "dp" / "st" = one source per list (split view)
+  const COLUMNS = {
+    all: [
+      { key: "total", src: "" },
+      { key: "adv", src: "dp" },
+      { key: "syn", src: "dp" },
+      { key: "stVs", src: "st" },
+      { key: "stWith", src: "st" },
+      { key: "stWr", src: "st" },
+      { key: "wvs", src: "dp", wide: true },
+      { key: "wr", src: "dp", wide: true },
+      { key: "early", src: "dp", wide: true },
+      { key: "mid", src: "dp", wide: true },
+      { key: "late", src: "dp", wide: true },
+    ],
+    dp: [
+      { key: "total", src: "dp" },
+      { key: "adv", src: "dp" },
+      { key: "syn", src: "dp" },
+      { key: "wr", src: "dp" },
+      { key: "wvs", src: "dp", wide: true },
+      { key: "early", src: "dp", wide: true },
+      { key: "mid", src: "dp", wide: true },
+      { key: "late", src: "dp", wide: true },
+    ],
+    st: [
+      { key: "total", src: "st" },
+      { key: "stVs", src: "st" },
+      { key: "stWith", src: "st" },
+      { key: "stWr", src: "st" },
+    ],
+  };
+  const CELL_WIDTH = 50; // .MDH_Cell width + margin-right
 
-    // Source groups above the column names
-    const groups = createPanel("Panel", list, "MDH_GroupRow");
-    groups.AddClass("MDH_Row");
-    groups.AddClass("MDH_HeaderRow");
-    groups.AddClass("MDH_GroupRow");
+  function columnTitle(key) {
+    return {
+      total: T.total,
+      adv: T.vs,
+      syn: T.with,
+      stVs: T.vs,
+      stWith: T.with,
+      stWr: T.wrPos,
+      wvs: T.wrvs,
+      wr: T.wr,
+      early: T.early,
+      mid: T.mid,
+      late: T.late,
+    }[key];
+  }
+
+  function cellClass(col) {
+    let cls = "MDH_Cell";
+    if (col.src === "dp") cls += " MDH_SrcDp";
+    if (col.src === "st") cls += " MDH_SrcSt";
+    if (col.wide) cls += " MDH_WideOnly";
+    return cls;
+  }
+
+  function buildTable(listId, specName) {
+    const list = el(listId);
+    if (!list) return null;
+    const existing = state.tables[listId];
+    if (existing && existing.specName === specName) return existing;
+    list.RemoveAndDeleteChildren();
+    const spec = COLUMNS[specName];
+    const table = { specName: specName, spec: spec, rows: [] };
+    state.tables[listId] = table;
+
+    // Source groups above the column names (one label per run of columns from the same source)
+    const groups = createPanel("Panel", list, listId + "_Groups");
+    ["MDH_Row", "MDH_HeaderRow", "MDH_GroupRow"].forEach((c) => groups.AddClass(c));
     label(groups, "MDH_IconSpacer", "");
     label(groups, "MDH_Name", "");
-    label(groups, "MDH_Cell", "");
-    label(groups, "MDH_Group MDH_Group2 MDH_SrcDp", T.groupDp);
-    label(groups, "MDH_Group MDH_Group3 MDH_SrcSt", ST ? T.groupSt : T.stMissing);
-    label(groups, "MDH_Group MDH_Group5 MDH_SrcDp MDH_WideOnly", T.groupDp);
+    for (let i = 0; i < spec.length;) {
+      let j = i;
+      while (j < spec.length && spec[j].src === spec[i].src && !!spec[j].wide === !!spec[i].wide) j++;
+      const src = spec[i].src;
+      const text = src === "dp" ? T.groupDp : src === "st" ? (ST ? T.groupSt : T.stMissing) : "";
+      let cls = "MDH_Group";
+      if (src === "dp") cls += " MDH_SrcDp";
+      if (src === "st") cls += " MDH_SrcSt";
+      if (spec[i].wide) cls += " MDH_WideOnly";
+      if (!src) cls = "MDH_Cell";
+      const g = label(groups, cls, text);
+      if (src) {
+        try {
+          g.style.width = (j - i) * CELL_WIDTH - 4 + "px";
+        } catch (e) {}
+      }
+      i = j;
+    }
 
-    const header = createPanel("Panel", list, "MDH_HeaderRow");
+    const header = createPanel("Panel", list, listId + "_Header");
     header.AddClass("MDH_Row");
     header.AddClass("MDH_HeaderRow");
     label(header, "MDH_IconSpacer", "");
     label(header, "MDH_Name", T.hero);
-    const totalHeader = label(header, "MDH_Cell", T.total);
-    totalHeader.SetPanelEvent("onmouseover", () => showTooltip(totalHeader, T.tooltipTotal));
-    totalHeader.SetPanelEvent("onmouseout", hideTooltip);
-    label(header, "MDH_Cell MDH_SrcDp", T.vs);
-    label(header, "MDH_Cell MDH_SrcDp", T.with);
-    label(header, "MDH_Cell MDH_SrcSt", T.vs);
-    label(header, "MDH_Cell MDH_SrcSt", T.with);
-    label(header, "MDH_Cell MDH_SrcSt", T.wrPos);
-    label(header, "MDH_Cell MDH_SrcDp MDH_WideOnly", T.wrvs);
-    label(header, "MDH_Cell MDH_SrcDp MDH_WideOnly", T.wr);
-    label(header, "MDH_Cell MDH_SrcDp MDH_WideOnly", T.early);
-    label(header, "MDH_Cell MDH_SrcDp MDH_WideOnly", T.mid);
-    label(header, "MDH_Cell MDH_SrcDp MDH_WideOnly", T.late);
+    spec.forEach((col) => {
+      const h = label(header, cellClass(col), columnTitle(col.key));
+      if (col.key === "total") {
+        const tip = specName === "all" ? T.tooltipTotal : T.tooltipTotalOne;
+        h.SetPanelEvent("onmouseover", () => showTooltip(h, tip));
+        h.SetPanelEvent("onmouseout", hideTooltip);
+      }
+    });
 
     for (let i = 0; i < ROWS; i++) {
-      const row = createPanel("Panel", list, "MDH_Row" + i);
+      const row = createPanel("Panel", list, listId + "_Row" + i);
       row.AddClass("MDH_Row");
       const icon = createPanel("DOTAHeroImage", row, "", {
         heroimagestyle: "landscape",
         scaling: "stretch-to-fit-y-preserve-aspect",
       });
       icon.AddClass("MDH_Icon");
-      const cells = {
-        icon: icon,
-        name: label(row, "MDH_Name", ""),
-        total: label(row, "MDH_Cell MDH_Total", ""),
-        adv: label(row, "MDH_Cell", ""),
-        syn: label(row, "MDH_Cell", ""),
-        stVs: label(row, "MDH_Cell", ""),
-        stWith: label(row, "MDH_Cell", ""),
-        stWr: label(row, "MDH_Cell", ""),
-        wvs: label(row, "MDH_Cell MDH_WideOnly", ""),
-        wr: label(row, "MDH_Cell MDH_WideOnly", ""),
-        early: label(row, "MDH_Cell MDH_WideOnly", ""),
-        mid: label(row, "MDH_Cell MDH_WideOnly", ""),
-        late: label(row, "MDH_Cell MDH_WideOnly", ""),
-      };
+      const cells = { icon: icon, name: label(row, "MDH_Name", "") };
+      spec.forEach((col) => {
+        let cls = "MDH_Cell";
+        if (col.key === "total") cls += " MDH_Total";
+        if (col.wide) cls += " MDH_WideOnly";
+        cells[col.key] = label(row, cls, "");
+      });
       const entry = { row: row, cells: cells, tooltip: "", heroId: 0 };
       row.SetPanelEvent("onmouseover", () => {
         if (entry.tooltip) showTooltip(row, entry.tooltip);
@@ -674,8 +751,9 @@ var MinifyDraftHelper = (function () {
           update(true);
         } catch (e) {}
       });
-      state.rows.push(entry);
+      table.rows.push(entry);
     }
+    return table;
   }
 
   function setValue(lbl, value) {
@@ -690,31 +768,37 @@ var MinifyDraftHelper = (function () {
     lbl.SetHasClass("MDH_Bad", wr > 0 && wr <= 49);
   }
 
-  function tooltipFor(r) {
+  function setDash(lbl) {
+    lbl.text = "—";
+    lbl.SetHasClass("MDH_Good", false);
+    lbl.SetHasClass("MDH_Bad", false);
+  }
+
+  function tooltipFor(r, source) {
     const lines = [heroDisplayName(r.hero) + (r.fit === 1 ? " (" + T.situational + ")" : "")];
+    const showDp = source !== "st";
+    const showSt = source !== "dp" && !!ST;
     const part = (list) =>
       list
         .slice()
-        .sort((a, b) => b[1] + b[2] - a[1] - a[2])
-        .map(
-          (p) =>
-            heroDisplayName(DATA.heroes[p[0]]) +
-            " " +
-            T.groupDp +
-            " " +
-            fmt(p[1]) +
-            (ST ? " / " + T.groupSt + " " + fmt(p[2]) + "%" : ""),
-        )
+        .sort((a, b) => (showDp ? b[1] - a[1] : b[2] - a[2]))
+        .map((p) => {
+          const vals = [];
+          if (showDp) vals.push((showSt ? T.groupDp + " " : "") + fmt(p[1]));
+          if (showSt) vals.push((showDp ? T.groupSt + " " : "") + fmt(p[2]) + "%");
+          return heroDisplayName(DATA.heroes[p[0]]) + " " + vals.join(" / ");
+        })
         .join(", ");
     if (r.vsList.length) lines.push(T.vsLine + ": " + part(r.vsList));
     if (r.withList.length) lines.push(T.withLine + ": " + part(r.withList));
     return lines.join("\n");
   }
 
-  function renderRows(results) {
-    buildTable();
-    for (let i = 0; i < state.rows.length; i++) {
-      const entry = state.rows[i];
+  function renderTable(listId, specName, results) {
+    const table = buildTable(listId, specName);
+    if (!table) return;
+    for (let i = 0; i < table.rows.length; i++) {
+      const entry = table.rows[i];
       const r = results[i];
       entry.row.visible = !!r;
       if (!r) continue;
@@ -729,26 +813,17 @@ var MinifyDraftHelper = (function () {
       c.name.text = heroDisplayName(r.hero) + (r.fit === 1 ? "*" : "");
       entry.heroId = r.hero.id;
       entry.row.SetHasClass("MDH_Selected", state.detailHero === r.hero.id);
-      setValue(c.total, r.total);
-      setValue(c.adv, r.adv);
-      setValue(c.syn, r.syn);
-      if (ST) {
-        setValue(c.stVs, r.stVs);
-        setValue(c.stWith, r.stWith);
-        setWinrate(c.stWr, r.stWr);
-      } else {
-        [c.stVs, c.stWith, c.stWr].forEach((l) => {
-          l.text = "—";
-          l.SetHasClass("MDH_Good", false);
-          l.SetHasClass("MDH_Bad", false);
-        });
-      }
-      setValue(c.wvs, r.wvs);
-      setWinrate(c.wr, r.hero.wr);
-      setValue(c.early, r.hero.stage[0]);
-      setValue(c.mid, r.hero.stage[1]);
-      setValue(c.late, r.hero.stage[2]);
-      entry.tooltip = tooltipFor(r);
+      table.spec.forEach((col) => {
+        const lbl = c[col.key];
+        if (col.src === "st" && !ST) return setDash(lbl);
+        if (col.key === "stWr") return setWinrate(lbl, r.stWr);
+        if (col.key === "wr") return setWinrate(lbl, r.hero.wr);
+        if (col.key === "early") return setValue(lbl, r.hero.stage[0]);
+        if (col.key === "mid") return setValue(lbl, r.hero.stage[1]);
+        if (col.key === "late") return setValue(lbl, r.hero.stage[2]);
+        setValue(lbl, r[col.key]);
+      });
+      entry.tooltip = tooltipFor(r, specName);
     }
   }
 
@@ -852,7 +927,11 @@ var MinifyDraftHelper = (function () {
     try {
       win.style.width = state.width + "px";
     } catch (e) {}
-    root.SetHasClass("MDH_Wide", state.width >= WIDE_THRESHOLD);
+    const splitNow = state.split && !!ST;
+    root.SetHasClass("MDH_Wide", state.width >= (splitNow ? SPLIT_WIDE_THRESHOLD : WIDE_THRESHOLD));
+    root.SetHasClass("MDH_Split", splitNow);
+    const split = el("MDH_BtnSplit");
+    if (split) split.SetHasClass("MDH_Active", splitNow);
     root.SetHasClass("MDH_Free", state.free);
     if (state.free) {
       try {
@@ -957,14 +1036,25 @@ var MinifyDraftHelper = (function () {
       pos,
       state.manualPos,
       state.detailHero,
+      state.split,
     ]);
     updateDebug(draft, icons, positions);
     if (!force && signature === state.lastSignature) return;
     state.lastSignature = signature;
 
-    const results = recommend(draft, pos);
-    renderRows(results);
-    renderItems(results, draft, pos);
+    const list2 = el("MDH_List2");
+    let itemResults;
+    if (state.split && ST) {
+      renderTable("MDH_List", "dp", recommend(draft, pos, "dp"));
+      itemResults = recommend(draft, pos, "st");
+      renderTable("MDH_List2", "st", itemResults);
+      if (list2) list2.visible = true;
+    } else {
+      itemResults = recommend(draft, pos, "all");
+      renderTable("MDH_List", "all", itemResults);
+      if (list2) list2.visible = false;
+    }
+    renderItems(itemResults, draft, pos);
 
     const enemiesPicked = draft.enemies.filter((e) => e.hero).length;
     const alliesPicked = draft.allies.filter((a) => a.hero && !a.local).length;
@@ -1029,6 +1119,7 @@ var MinifyDraftHelper = (function () {
         left: state.left,
         top: state.top,
         collapsed: state.collapsed,
+        split: state.split,
       };
       topPanel().SetAttributeString(STATE_ATTRIBUTE, JSON.stringify(data));
     } catch (e) {}
@@ -1045,6 +1136,7 @@ var MinifyDraftHelper = (function () {
       state.left = data.left || 0;
       state.top = data.top || 0;
       state.collapsed = !!data.collapsed;
+      if (typeof data.split === "boolean") state.split = data.split;
     } catch (e) {}
   }
 
@@ -1151,7 +1243,11 @@ var MinifyDraftHelper = (function () {
     else if (name === "smaller") state.scale = clamp(state.scale - 10, MIN_SCALE, MAX_SCALE);
     else if (name === "wide") state.width = state.width >= WIDE_THRESHOLD ? NORMAL_WIDTH : WIDE_WIDTH;
     else if (name === "dock") state.free = false;
-    else if (name === "collapse") state.collapsed = !state.collapsed;
+    else if (name === "split") {
+      state.split = !state.split;
+      if (state.split && state.width < SPLIT_WIDTH) state.width = SPLIT_WIDTH;
+      else if (!state.split && state.width >= SPLIT_WIDTH) state.width = NORMAL_WIDTH;
+    } else if (name === "collapse") state.collapsed = !state.collapsed;
     else if (name === "hide") state.hidden = true;
     else if (name === "show") state.hidden = false;
     else if (name === "toggle") state.hidden = !state.hidden;

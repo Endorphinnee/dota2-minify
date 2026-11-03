@@ -14,6 +14,12 @@
       "default": true
     },
     {
+      "key": "split_view",
+      "text": "Split view: dotapicker and STRATZ lists side by side",
+      "type": "checkbox",
+      "default": false
+    },
+    {
       "key": "hotkey",
       "text": "Show/hide hotkey",
       "type": "combo",

@@ -383,3 +383,23 @@
   color: #c3ccd5;
   font-size: 12px;
 }
+
+#MDH_Tables {
+  width: 100%;
+  flow-children: right;
+}
+
+#MDH_List {
+  width: fill-parent-flow(1);
+}
+
+#MDH_List2 {
+  width: fill-parent-flow(1);
+  margin-left: 12px;
+  padding-left: 8px;
+  border-left: 1px solid #ffffff1a;
+}
+
+.MDH_Btn.MDH_Active {
+  background-color: #b8862a;
+}
