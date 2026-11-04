@@ -21,7 +21,7 @@
 }
 
 #MDH_Window {
-  width: 520px;
+  width: 572px;
   border-radius: 4px;
   border: 1px solid #ffffff22;
   background-color: #0b0f14e6;
@@ -54,7 +54,7 @@
 }
 
 .MDH_Wide #MDH_Window {
-  width: 780px;
+  width: 832px;
 }
 
 .MDH_Hidden #MDH_Window {
@@ -85,7 +85,7 @@
 }
 
 #MDH_Content {
-  width: 100%;
+  width: fill-parent-flow(1);
   flow-children: down;
   padding: 6px 12px 10px 8px;
 }
@@ -407,4 +407,58 @@
 /* Main menu / lobby: start below the dashboard's top bar */
 .MDH_Menu#MDH_Root {
   margin-top: 150px;
+}
+
+#MDH_Inner {
+  width: 100%;
+  flow-children: right;
+}
+
+/* Side bar with the window buttons (D2PT drafter, player stats) */
+#MDH_SideBar {
+  width: 52px;
+  height: 100%;
+  flow-children: down;
+  padding: 8px 4px;
+  border-right: 1px solid #ffffff14;
+  background-color: #ffffff06;
+  border-radius: 4px 0px 0px 4px;
+}
+
+.MDH_SideBtn {
+  width: 100%;
+  height: 44px;
+  margin-bottom: 6px;
+  border-radius: 4px;
+  border: 1px solid #ffffff1f;
+  background-color: #ffffff12;
+  transition-property: background-color, border-color;
+  transition-duration: 0.15s;
+}
+
+.MDH_SideBtn:hover {
+  background-color: #e8c76a33;
+  border-color: #e8c76a88;
+}
+
+.MDH_SideBtn Label {
+  horizontal-align: center;
+  vertical-align: center;
+  text-align: center;
+  color: #e6edf3;
+  font-size: 12px;
+  font-weight: bold;
+}
+
+#MDH_SideD2pt Label {
+  color: #f0b45a;
+}
+
+#MDH_SidePlayers Label {
+  color: #c79bf2;
+  font-size: 11px;
+}
+
+.MDH_Collapsed #MDH_SideBar {
+  visibility: collapse;
 }

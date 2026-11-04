@@ -13,12 +13,12 @@ var MinifyDraftHelper = (function () {
   const SIZE_TO_SCALE = { 1: 70, 2: 85, 3: 100, 4: 120, 5: 140 };
   const MIN_SCALE = 50;
   const MAX_SCALE = 200;
-  const NORMAL_WIDTH = 520;
-  const WIDE_WIDTH = 780;
-  const WIDE_THRESHOLD = 700;
-  const SPLIT_WIDTH = 900;
-  const SPLIT_WIDE_THRESHOLD = 1150;
-  const MIN_WIDTH = 420;
+  const NORMAL_WIDTH = 572; // includes the 52px side bar
+  const WIDE_WIDTH = 832;
+  const WIDE_THRESHOLD = 752;
+  const SPLIT_WIDTH = 952;
+  const SPLIT_WIDE_THRESHOLD = 1202;
+  const MIN_WIDTH = 472;
   const MAX_WIDTH = 1400;
   const STATE_ATTRIBUTE_BASE = "minify_draft_helper_state";
   const TICK_SECONDS = 0.5;
@@ -95,6 +95,9 @@ var MinifyDraftHelper = (function () {
       matches: "matches",
       clickHint: "click a hero to see items",
       noToken: "no token",
+      playersButton: "Players",
+      windowsNeedBridge:
+        "To open the windows, enable 'Player info window' (or 'Source: dota2protracker') in the Draft Helper settings, patch, and keep Minify running with -condebug.",
       off: "off",
       allOff: "All sources are turned off in the mod settings.",
       tooltipTotalOne: "Total = vs enemies + with allies, this source only",
@@ -137,6 +140,9 @@ var MinifyDraftHelper = (function () {
       matches: "матчей",
       clickHint: "нажмите на героя, чтобы увидеть предметы",
       noToken: "нет токена",
+      playersButton: "Игроки",
+      windowsNeedBridge:
+        "Чтобы открывать окна, включите в настройках Draft Helper «Player info window» (или «Source: dota2protracker»), сделайте патч и держите Minify открытым (нужен -condebug).",
       off: "выкл.",
       allOff: "Все источники выключены в настройках мода.",
       tooltipTotalOne: "Итог = против врагов + с союзниками, только этот источник",
@@ -1385,7 +1391,12 @@ var MinifyDraftHelper = (function () {
     else if (name === "wide") state.width = state.width >= WIDE_THRESHOLD ? NORMAL_WIDTH : WIDE_WIDTH;
     else if (name === "dock") state.free = false;
     else if (name === "d2pt" || name === "players") {
-      // Minify reads the console (console.log / VConsole) and opens the window
+      // Minify reads the console (console.log / VConsole) and opens the window.
+      // Without the bridge setting Minify does not read the console, so say what to enable.
+      if (!CFG.bridge) {
+        setStatus(T.windowsNeedBridge);
+        return;
+      }
       state.commandCounter = (state.commandCounter || 0) + 1;
       $.Msg(
         "MDH_CMD " + (name === "d2pt" ? "open_d2pt" : "open_players") + " " + Date.now() + "-" + state.commandCounter,
@@ -1432,11 +1443,8 @@ var MinifyDraftHelper = (function () {
   }
 
   function init() {
-    // The window buttons only work when Minify reads the console (bridge enabled in the settings)
-    ["MDH_BtnD2pt", "MDH_BtnPlayers"].forEach((id) => {
-      const b = el(id);
-      if (b) b.visible = !!CFG.bridge;
-    });
+    const playersLabel = el("MDH_SidePlayersLabel");
+    if (playersLabel) playersLabel.text = T.playersButton;
     const debugEntry = el("MDH_Debug");
     if (debugEntry) debugEntry.visible = !!CFG.debug;
     const hk = el("MDH_HotkeyHint");
