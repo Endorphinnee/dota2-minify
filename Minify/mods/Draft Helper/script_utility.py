@@ -168,9 +168,9 @@ def player_query_report(token):
         data = stratz.query(token, query, {"id": own_id})
         player = data.get("player") or {}
         recent = companion.summarize_recent(player.get("matches"), own_id, companion.hero_names())
-        lines.append(
-            f"  own account: matches {player.get('matchCount')}, recent: {json.dumps(recent, ensure_ascii=False)}"
-        )
+        level = (player.get("steamAccount") or {}).get("dotaAccountLevel")
+        lines.append(f"  own account: trophy level {level}, matches {player.get('matchCount')}")
+        lines.append(f"  own recent games: {json.dumps(recent, ensure_ascii=False)}")
     except Exception as e:
         lines.append(f"player query failed: {type(e).__name__}: {e}")
     return lines

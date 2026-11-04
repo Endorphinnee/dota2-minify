@@ -44,7 +44,7 @@ MATCH_ID = re.compile(r"Lobby MatchID:\s*(\d+)")
 GAME_STATE = re.compile(r"GameState:\s*(\S+)")
 
 PLAYER_FIELDS = ("matchCount", "winCount", "firstMatchDate", "lastMatchDate")
-ACCOUNT_FIELDS = ("name", "seasonRank", "isAnonymous", "smurfFlag", "isStratzPublic")
+ACCOUNT_FIELDS = ("name", "seasonRank", "isAnonymous", "smurfFlag", "isStratzPublic", "dotaAccountLevel")
 
 RECENT_MATCHES = 40  # asked for; tournament, lobby and old games are dropped afterwards
 RECENT_DAYS = 60
@@ -732,6 +732,7 @@ class Companion:
         }
         if stats:
             account = stats.get("steamAccount") or {}
+            row["level"] = account.get("dotaAccountLevel")  # trophy level, shown even for private profiles
             matches = stats.get("matchCount") or 0
             wins = stats.get("winCount") or 0
             row.update(
@@ -824,6 +825,8 @@ WINDOW_HTML = r"""<!doctype html>
   .wl { font-weight: 600; width: 14px; display: inline-block; }
   .medal { position: relative; display: inline-block; width: 34px; height: 34px; vertical-align: middle; }
   .medal img { position: absolute; inset: 0; width: 34px; height: 34px; }
+  .lvl { display: inline-block; min-width: 20px; padding: 0 5px; margin-left: 6px; border-radius: 10px; text-align: center;
+         font-size: 11px; font-weight: 600; color: #f3d98b; background: #2a2116; border: 1px solid #b8862a; }
   .hero { color: #d6dde4; }
   .tag.spam { background: #e8c76a33; color: #f3d98b; }
   .tag.comfort { background: #7fd36b26; color: #a9e69b; }
@@ -901,7 +904,8 @@ function table(rows) {
         "</td><td class=num>" + r.matches + "</td><td class='num " + wrClass(r.winrate) + "'>" + (r.winrate == null ? "—" : r.winrate.toFixed(1) + "%") + "</td>";
     else profile = "<td colspan=3 class=muted>—</td>";
     const loss = r.loss == null ? "—" : r.loss + "%";
-    h += "<tr class='" + (r.local ? "local" : "") + "'><td>" + esc(r.name) + (r.local ? "<span class=tag>" + L("вы","you") + "</span>" : "") +
+    const level = r.level ? "<span class=lvl title='" + L("Уровень трофеев", "Trophy level") + "'>" + r.level + "</span>" : "";
+    h += "<tr class='" + (r.local ? "local" : "") + "'><td>" + esc(r.name) + level + (r.local ? "<span class=tag>" + L("вы","you") + "</span>" : "") +
          "</td><td>" + heroIcon(r.heroKey, r.hero, "hm") + "</td><td class='num " + pingClass(r.ping) + "'>" + (r.ping == null ? "—" : r.ping) +
          "</td><td class='num " + (r.loss ? "bad" : "") + "'>" + loss + "</td><td>" + esc(r.state) + "</td>" + profile + "</tr>" + details(r);
   }
