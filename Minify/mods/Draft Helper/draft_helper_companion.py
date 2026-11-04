@@ -32,6 +32,8 @@ D2PT_DRAFTER = "https://dota2protracker.com/drafter"
 D2PT_MIN_RELOAD = 2.0  # seconds between drafter reloads
 DEFAULT_PORT = 29000  # VConsole's port
 BRIDGE_TAG = "MDH_BRIDGE "
+COMMAND_TAG = "MDH_CMD "  # "MDH_CMD <command> <nonce>", printed by the in-game panel's buttons
+COMMANDS = ("open_d2pt", "open_players")
 STATUS_INTERVAL = 3.0
 RECONNECT_DELAY = 5.0
 STATS_PAUSE = 0.6
@@ -335,6 +337,21 @@ class VConsoleReader:
         return lines
 
 
+class WindowApi:
+    """Methods the player window's buttons call (window.pywebview.api.*). Private attributes are not exposed."""
+
+    def __init__(self, companion):
+        self._companion = companion
+
+    def open_d2pt(self):
+        self._companion.run_command("open_d2pt")
+        return True
+
+    def refresh_profiles(self):
+        self._companion.run_command("refresh_profiles")
+        return True
+
+
 class StatusParser:
     """Collects `status` tables and bridge lines from the console stream."""
 
@@ -344,9 +361,20 @@ class StatusParser:
         self.bridge = None
         self.match_id = None
         self.game_state = None
+        self.commands = []  # (command, nonce) from the in-game panel
+        self._seen_nonces = set()
 
     def feed(self, line):
         """Returns True when something visible changed."""
+        if COMMAND_TAG in line:
+            # The same line can arrive twice (console log and VConsole), the nonce keeps it single
+            parts = line.split(COMMAND_TAG, 1)[1].split()
+            if parts and parts[0] in COMMANDS:
+                key = (parts[0], parts[1] if len(parts) > 1 else "")
+                if key not in self._seen_nonces:
+                    self._seen_nonces.add(key)
+                    self.commands.append(parts[0])
+            return False
         if BRIDGE_TAG in line:
             try:
                 self.bridge = json.loads(line.split(BRIDGE_TAG, 1)[1].strip())
@@ -439,7 +467,13 @@ class Companion:
             self._bring_to_front(self.window)
             return
         self.window = webview.create_window(
-            "Draft Helper", html=WINDOW_HTML, width=960, height=680, resizable=True, on_top=True
+            "Draft Helper",
+            html=WINDOW_HTML,
+            js_api=WindowApi(self),
+            width=960,
+            height=680,
+            resizable=True,
+            on_top=True,
         )
         self._windows_open += 1
         try:
@@ -500,8 +534,24 @@ class Companion:
         changed = False
         for line in lines:
             changed |= self.parser.feed(line.rstrip("\r"))
+        while self.parser.commands:
+            self.run_command(self.parser.commands.pop(0))
         if changed:
             self.push()
+
+    def run_command(self, command):
+        """Buttons of the in-game panel and of the player window end up here."""
+        try:
+            if command == "open_d2pt":
+                self.open_d2pt()
+            elif command == "open_players":
+                self.open_players()
+            elif command == "refresh_profiles":
+                self.stats.clear()
+                self.push()
+        except Exception as e:
+            if self.log:
+                self.log(f"[Draft Helper] window command {command} failed: {type(e).__name__}: {e}")
 
     def _console_loop(self):
         while self.alive:
@@ -746,6 +796,9 @@ WINDOW_HTML = r"""<!doctype html>
   body { margin: 0; background: #0b0f14; color: #d6dde4; font: 13px/1.35 "Segoe UI", system-ui, sans-serif; }
   header { padding: 8px 12px; background: #121820; border-bottom: 1px solid #ffffff14; display: flex; gap: 12px; align-items: baseline; flex-wrap: wrap; }
   header b { color: #e8c76a; letter-spacing: 1px; text-transform: uppercase; }
+  header .actions { margin-left: auto; display: flex; gap: 6px; }
+  header button { background: #ffffff14; color: #d6dde4; border: 1px solid #ffffff1f; border-radius: 4px; padding: 3px 10px; font: inherit; cursor: pointer; }
+  header button:hover { background: #e8c76a33; border-color: #e8c76a66; }
   .meta { color: #8a96a3; font-size: 12px; }
   .bad { color: #e8695a; } .good { color: #7fd36b; } .warn { color: #e8c76a; } .muted { color: #6b7782; }
   main { padding: 6px 12px 12px; }
@@ -778,10 +831,12 @@ WINDOW_HTML = r"""<!doctype html>
   .legend { color: #6b7782; font-size: 11px; margin-top: 10px; white-space: normal; }
 </style></head>
 <body>
-<header><b>Draft Helper</b><span id="conn" class="meta"></span><span id="match" class="meta"></span><span id="upd" class="meta"></span></header>
+<header><b>Draft Helper</b><span id="conn" class="meta"></span><span id="match" class="meta"></span><span id="upd" class="meta"></span>
+<span class="actions"><button onclick="api('open_d2pt')" title="dota2protracker drafter">D2PT</button><button onclick="api('refresh_profiles')" id="refresh">⟳</button></span></header>
 <main id="main"><div class="hint">…</div></main>
 <script>
 const L = (ru, en) => (window.__ru === false ? en : ru);
+function api(name) { try { window.pywebview.api[name](); } catch (e) {} }
 function esc(s) { return String(s == null ? "" : s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
 function pingClass(p) { return p == null ? "muted" : p >= 120 ? "bad" : p >= 70 ? "warn" : "good"; }
 function impClass(v) { return v == null ? "muted" : v >= 5 ? "good" : v <= -5 ? "bad" : ""; }
@@ -854,6 +909,7 @@ function table(rows) {
 }
 window.render = function (m) {
   window.__ru = m.russian;
+  document.getElementById("refresh").title = L("Заново загрузить профили STRATZ", "Reload STRATZ profiles");
   const parts = [];
   if (m.connected) parts.push("<span class=good>" + L("консоль подключена","console connected") + " (" + esc(m.protocol) + ", " + m.port + ")</span>");
   else parts.push("<span class=muted>" + L("порт ","port ") + m.port + L(": нет связи",": not connected") + "</span>");

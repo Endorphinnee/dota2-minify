@@ -1384,7 +1384,14 @@ var MinifyDraftHelper = (function () {
     else if (name === "smaller") state.scale = clamp(state.scale - 10, MIN_SCALE, MAX_SCALE);
     else if (name === "wide") state.width = state.width >= WIDE_THRESHOLD ? NORMAL_WIDTH : WIDE_WIDTH;
     else if (name === "dock") state.free = false;
-    else if (name === "split") {
+    else if (name === "d2pt" || name === "players") {
+      // Minify reads the console (console.log / VConsole) and opens the window
+      state.commandCounter = (state.commandCounter || 0) + 1;
+      $.Msg(
+        "MDH_CMD " + (name === "d2pt" ? "open_d2pt" : "open_players") + " " + Date.now() + "-" + state.commandCounter,
+      );
+      return;
+    } else if (name === "split") {
       state.split = !state.split;
       if (state.split && state.width < SPLIT_WIDTH) state.width = SPLIT_WIDTH;
       else if (!state.split && state.width >= SPLIT_WIDTH) state.width = NORMAL_WIDTH;
@@ -1425,6 +1432,11 @@ var MinifyDraftHelper = (function () {
   }
 
   function init() {
+    // The window buttons only work when Minify reads the console (bridge enabled in the settings)
+    ["MDH_BtnD2pt", "MDH_BtnPlayers"].forEach((id) => {
+      const b = el(id);
+      if (b) b.visible = !!CFG.bridge;
+    });
     const debugEntry = el("MDH_Debug");
     if (debugEntry) debugEntry.visible = !!CFG.debug;
     const hk = el("MDH_HotkeyHint");
