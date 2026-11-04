@@ -32,6 +32,7 @@ query ($name: String!) {
       args { name type { kind name ofType { kind name ofType { kind name ofType { kind name } } } } }
       type { kind name ofType { kind name ofType { kind name ofType { kind name } } } }
     }
+    inputFields { name type { kind name ofType { kind name ofType { kind name } } } }
   }
 }
 """

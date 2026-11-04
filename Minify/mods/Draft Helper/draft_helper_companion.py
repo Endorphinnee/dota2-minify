@@ -42,6 +42,12 @@ GAME_STATE = re.compile(r"GameState:\s*(\S+)")
 PLAYER_FIELDS = ("matchCount", "winCount", "firstMatchDate", "lastMatchDate")
 ACCOUNT_FIELDS = ("name", "seasonRank", "isAnonymous", "smurfFlag", "isStratzPublic")
 
+RECENT_MATCHES = 25
+RECENT_FIELDS = ("heroId", "position", "isVictory", "imp", "kills", "deaths", "assists")
+SPAM_SHARE = 0.4  # one hero in at least 40% of the recent games...
+SPAM_MIN_GAMES = 6  # ...and at least this many games
+SCALAR_KINDS = ("SCALAR", "ENUM")
+
 RANKS_RU = ("Без ранга", "Рекрут", "Страж", "Рыцарь", "Герой", "Легенда", "Властелин", "Божество", "Титан")
 RANKS_EN = ("Uncalibrated", "Herald", "Guardian", "Crusader", "Archon", "Legend", "Ancient", "Divine", "Immortal")
 
@@ -71,6 +77,131 @@ def account_id(steamid):
     if value > STEAM64_BASE:
         value -= STEAM64_BASE
     return value if value > 0 else 0
+
+
+def _type_info(token, name):
+    """({field: {kind, type, args}}, {input field: type}) for a STRATZ GraphQL type."""
+    import draft_helper_stratz as stratz
+
+    data = stratz.query(token, stratz._TYPE_QUERY, {"name": name})
+    info = (data or {}).get("__type") or {}
+    fields = {}
+    for f in info.get("fields") or []:
+        t = stratz._unwrap(f.get("type"))
+        args = {a["name"]: stratz._unwrap(a.get("type")) for a in f.get("args") or []}
+        fields[f["name"]] = {"kind": t.get("kind"), "type": t.get("name"), "args": args}
+    inputs = {i["name"]: stratz._unwrap(i.get("type")) for i in info.get("inputFields") or []}
+    return fields, inputs
+
+
+def build_player_query(token):
+    """
+    Builds the player query only from fields STRATZ's schema really has.
+    Returns (query, notes); notes explain which optional parts were left out and why.
+    """
+    notes = []
+    player, _ = _type_info(token, "PlayerType")
+    scalar = [f for f in PLAYER_FIELDS if player.get(f, {}).get("kind") in SCALAR_KINDS]
+    account_part = ""
+    if "steamAccount" in player:
+        account, _ = _type_info(token, player["steamAccount"]["type"])
+        names = [f for f in ACCOUNT_FIELDS if account.get(f, {}).get("kind") in SCALAR_KINDS]
+        if names:
+            account_part = " steamAccount { " + " ".join(names) + " }"
+
+    recent_part = ""
+    matches = player.get("matches")
+    request = (matches or {}).get("args", {}).get("request")
+    if not matches:
+        notes.append("recent games: PlayerType has no 'matches'")
+    elif not request:
+        notes.append(f"recent games: 'matches' has no 'request' argument ({', '.join(matches['args'])})")
+    else:
+        _, request_inputs = _type_info(token, request.get("name"))
+        match_fields, _ = _type_info(token, matches["type"])
+        players = match_fields.get("players")
+        if "take" not in request_inputs:
+            notes.append(f"recent games: request has no 'take' ({', '.join(request_inputs)})")
+        elif not players:
+            notes.append(f"recent games: {matches['type']} has no 'players'")
+        else:
+            player_fields, _ = _type_info(token, players["type"])
+            wanted = [f for f in RECENT_FIELDS if player_fields.get(f, {}).get("kind") in SCALAR_KINDS]
+            by_id = "steamAccountId" in players["args"]
+            if not by_id and "steamAccountId" in player_fields:
+                wanted.append("steamAccountId")
+            if "heroId" not in wanted:
+                notes.append(f"recent games: {players['type']} has no 'heroId'")
+            else:
+                args = "(steamAccountId: $id)" if by_id else ""
+                recent_part = (
+                    f" matches(request: {{take: {RECENT_MATCHES}}}) {{ players{args} {{ {' '.join(wanted)} }} }}"
+                )
+                missing = [f for f in RECENT_FIELDS if f not in wanted]
+                notes.append("recent games: ok" + (f" (missing: {', '.join(missing)})" if missing else ""))
+
+    body = " ".join(scalar) + account_part + recent_part
+    return "query ($id: Long!) { player(steamAccountId: $id) { " + body + " } }", notes
+
+
+def _position_number(value):
+    text = str(value or "")
+    return int(text[-1]) if text.startswith("POSITION_") and text[-1].isdigit() else 0
+
+
+def summarize_recent(matches, aid, heroes, current_hero=0):
+    """Top heroes, spam flag, average IMP / KDA / winrate from the player's recent matches."""
+    games = []
+    for match in matches or []:
+        for p in (match or {}).get("players") or []:
+            if p.get("steamAccountId") in (None, aid) and p.get("heroId"):
+                games.append(p)
+                break
+    n = len(games)
+    if not n:
+        return None
+    wins = sum(1 for g in games if g.get("isVictory"))
+    imps = [g["imp"] for g in games if isinstance(g.get("imp"), (int, float))]
+    kills = sum(g.get("kills") or 0 for g in games)
+    deaths = sum(g.get("deaths") or 0 for g in games)
+    assists = sum(g.get("assists") or 0 for g in games)
+    has_kda = any(k in games[0] for k in ("kills", "deaths", "assists"))
+
+    by_hero = {}
+    for g in games:
+        h = by_hero.setdefault(int(g["heroId"]), {"n": 0, "wins": 0, "imps": [], "pos": {}})
+        h["n"] += 1
+        h["wins"] += 1 if g.get("isVictory") else 0
+        if isinstance(g.get("imp"), (int, float)):
+            h["imps"].append(g["imp"])
+        pos = _position_number(g.get("position"))
+        if pos:
+            h["pos"][pos] = h["pos"].get(pos, 0) + 1
+
+    top = []
+    for hero_id, h in sorted(by_hero.items(), key=lambda kv: (kv[1]["n"], kv[1]["wins"]), reverse=True)[:3]:
+        main_pos = max(h["pos"].items(), key=lambda kv: kv[1])[0] if h["pos"] else 0
+        top.append(
+            {
+                "hero": heroes.get(hero_id, f"#{hero_id}"),
+                "games": h["n"],
+                "winrate": round(h["wins"] / h["n"] * 100),
+                "pos": main_pos,
+                "imp": round(sum(h["imps"]) / len(h["imps"])) if h["imps"] else None,
+                "spam": h["n"] >= SPAM_MIN_GAMES and h["n"] / n >= SPAM_SHARE,
+            }
+        )
+    current = by_hero.get(int(current_hero or 0))
+    return {
+        "games": n,
+        "wins": wins,
+        "winrate": round(wins / n * 100),
+        "imp": round(sum(imps) / len(imps), 1) if imps else None,
+        "kda": round((kills + assists) / max(1, deaths), 1) if has_kda else None,
+        "top": top,
+        "currentGames": current["n"] if current else 0,
+        "currentWinrate": round(current["wins"] / current["n"] * 100) if current else None,
+    }
 
 
 VCONSOLE_HEADER = 12  # type[4] version[4] length[2] handle[2], big endian
@@ -202,8 +333,8 @@ class Companion:
         self.window = webview.create_window(
             "Draft Helper",
             html=WINDOW_HTML,
-            width=820,
-            height=470,
+            width=900,
+            height=620,
             resizable=True,
             on_top=True,
         )
@@ -313,28 +444,12 @@ class Companion:
     # ------------------------------------------------------------------ STRATZ
 
     def _build_query(self):
-        """Builds the player query from the fields STRATZ really has (checked once by introspection)."""
-        import draft_helper_stratz as stratz
-
-        def fields_of(type_name):
-            data = stratz.query(self.token, stratz._TYPE_QUERY, {"name": type_name})
-            info = (data or {}).get("__type") or {}
-            out = {}
-            for f in info.get("fields") or []:
-                t = stratz._unwrap(f.get("type"))
-                out[f["name"]] = (t.get("kind"), t.get("name"))
-            return out
-
-        player = fields_of("PlayerType")
-        scalar = [f for f in PLAYER_FIELDS if player.get(f, ("",))[0] in ("SCALAR", "ENUM")]
-        account_part = ""
-        if "steamAccount" in player:
-            account = fields_of(player["steamAccount"][1])
-            names = [f for f in ACCOUNT_FIELDS if account.get(f, ("",))[0] in ("SCALAR", "ENUM")]
-            if names:
-                account_part = " steamAccount { " + " ".join(names) + " }"
-        body = " ".join(scalar) + account_part
-        return "query ($id: Long!) { player(steamAccountId: $id) { " + body + " } }"
+        query, notes = build_player_query(self.token)
+        if self.log:
+            for note in notes:
+                if not note.endswith(": ok"):
+                    self.log(f"[Draft Helper] player info: {note}")
+        return query
 
     def _stats_loop(self):
         import draft_helper_stratz as stratz
@@ -436,6 +551,7 @@ class Companion:
                     "private": bool(account.get("isAnonymous")) or account.get("isStratzPublic") is False,
                     "smurf": bool(account.get("smurfFlag")),
                     "error": stats.get("error", ""),
+                    "recent": summarize_recent(stats.get("matches"), aid, self.heroes, hero),
                 }
             )
         return row
@@ -498,6 +614,12 @@ WINDOW_HTML = r"""<!doctype html>
   .tag { font-size: 11px; padding: 0 5px; border-radius: 3px; background: #ffffff14; margin-left: 4px; }
   .tag.smurf { background: #e8695a33; color: #ffb3a8; }
   .hint { color: #8a96a3; padding: 12px 0; white-space: normal; }
+  tr.details td { padding: 0 6px 6px 18px; border-bottom: 1px solid #ffffff14; color: #9fb0bf; font-size: 12px; white-space: normal; }
+  .hero { color: #d6dde4; }
+  .tag.spam { background: #e8c76a33; color: #f3d98b; }
+  .tag.comfort { background: #7fd36b26; color: #a9e69b; }
+  .tag.new { background: #ffffff14; color: #9fb0bf; }
+  .legend { color: #6b7782; font-size: 11px; margin-top: 10px; white-space: normal; }
 </style></head>
 <body>
 <header><b>Draft Helper</b><span id="conn" class="meta"></span><span id="match" class="meta"></span><span id="upd" class="meta"></span></header>
@@ -506,6 +628,26 @@ WINDOW_HTML = r"""<!doctype html>
 const L = (ru, en) => (window.__ru === false ? en : ru);
 function esc(s) { return String(s == null ? "" : s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
 function pingClass(p) { return p == null ? "muted" : p >= 120 ? "bad" : p >= 70 ? "warn" : "good"; }
+function impClass(v) { return v == null ? "muted" : v >= 5 ? "good" : v <= -5 ? "bad" : ""; }
+function signed(v) { return v == null ? "—" : (v > 0 ? "+" : "") + v; }
+function details(r) {
+  const s = r.recent;
+  if (!s) return "";
+  const top = s.top.map(t =>
+    "<span class=hero>" + esc(t.hero) + "</span> " + t.games + L(" игр", " g") + " · " + t.winrate + "%" +
+    (t.pos ? " · " + L("поз. ", "pos ") + t.pos : "") +
+    (t.imp != null ? " · IMP <span class='" + impClass(t.imp) + "'>" + signed(t.imp) + "</span>" : "") +
+    (t.spam ? "<span class='tag spam'>" + L("спамит", "spams") + "</span>" : "")).join(" &nbsp;|&nbsp; ");
+  let line = L("Топ за ", "Top of last ") + s.games + L(" игр: ", " games: ") + top;
+  let skill = "IMP <b class='" + impClass(s.imp) + "'>" + signed(s.imp) + "</b>";
+  if (s.kda != null) skill += " · KDA " + s.kda;
+  skill += " · " + s.wins + "-" + (s.games - s.wins) + " (<span class='" + wrClass(s.winrate) + "'>" + s.winrate + "%</span>)";
+  if (r.hero) {
+    if (s.currentGames >= 3) skill += "<span class='tag comfort'>" + esc(r.hero) + ": " + s.currentGames + L(" игр, ", " g, ") + s.currentWinrate + "%</span>";
+    else skill += "<span class='tag new'>" + esc(r.hero) + L(": мало игр", ": few games") + " (" + s.currentGames + ")</span>";
+  }
+  return "<tr class=details><td colspan=8>" + line + "<br>" + L("Последние игры: ", "Recent games: ") + skill + "</td></tr>";
+}
 function wrClass(w) { return w == null ? "muted" : w >= 52 ? "good" : w <= 48 ? "bad" : ""; }
 function table(rows) {
   let h = "<table><colgroup><col style='width:23%'><col style='width:17%'><col style='width:7%'><col style='width:8%'>" +
@@ -525,7 +667,7 @@ function table(rows) {
     const loss = r.loss == null ? "—" : r.loss + "%";
     h += "<tr class='" + (r.local ? "local" : "") + "'><td>" + esc(r.name) + (r.local ? "<span class=tag>" + L("вы","you") + "</span>" : "") +
          "</td><td>" + esc(r.hero) + "</td><td class='num " + pingClass(r.ping) + "'>" + (r.ping == null ? "—" : r.ping) +
-         "</td><td class='num " + (r.loss ? "bad" : "") + "'>" + loss + "</td><td>" + esc(r.state) + "</td>" + profile + "</tr>";
+         "</td><td class='num " + (r.loss ? "bad" : "") + "'>" + loss + "</td><td>" + esc(r.state) + "</td>" + profile + "</tr>" + details(r);
   }
   return h + "</table>";
 }
@@ -556,6 +698,8 @@ window.render = function (m) {
   if (!m.bridge) h += "<div class=hint>" + L("Герои и профили появятся, когда панель Draft Helper загрузится на экране драфта (включите «Player info window» в настройках и перепатчьте).",
                                                    "Heroes and profiles appear once the Draft Helper panel loads in the draft (enable “Player info window” and patch again).") + "</div>";
   else if (!m.token) h += "<div class=hint>" + L("Для рангов и винрейта нужен токен STRATZ.", "A STRATZ token is needed for ranks and winrates.") + "</div>";
+  if (m.players.some(p => p.recent)) h += "<div class=legend>" + L("IMP — оценка STRATZ того, насколько полезно игрок сыграл матч: 0 — средний уровень для этого героя и позиции, плюс — лучше, минус — хуже. «Спамит» — один герой в 40%+ последних игр.",
+    "IMP is STRATZ's rating of how useful a player was in a match: 0 is average for that hero and position, plus is better, minus is worse. “Spams” means one hero in 40%+ of recent games.") + "</div>";
   main.innerHTML = h;
 };
 </script>

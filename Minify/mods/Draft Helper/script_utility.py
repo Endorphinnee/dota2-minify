@@ -84,6 +84,8 @@ def check_stratz():
     except Exception as e:
         lines = [f"STRATZ check: FAILED: {type(e).__name__}: {e}"]
 
+    lines += player_query_report(token)
+
     report_path = os.path.join(base.logs_dir, "draft_helper_stratz.txt")
     try:
         os.makedirs(base.logs_dir, exist_ok=True)
@@ -135,3 +137,29 @@ def open_player_window():
             "Draft Helper: enable 'Player info window' and patch, otherwise heroes and profiles stay empty",
             msg_type="warning",
         )
+
+
+def player_query_report(token):
+    """Builds the player window's STRATZ query and runs it on the user's own account (Minify's Steam ID)."""
+    import json
+
+    lines = []
+    try:
+        query, notes = companion.build_player_query(token)
+        lines.append("player query: " + query)
+        lines += ["  " + note for note in notes]
+        from core import steam
+
+        own_id = companion.account_id(steam.current_steam_id)
+        if not own_id:
+            lines.append("  own account: unknown Steam ID, skipped")
+            return lines
+        data = stratz.query(token, query, {"id": own_id})
+        player = data.get("player") or {}
+        recent = companion.summarize_recent(player.get("matches"), own_id, companion.hero_names())
+        lines.append(
+            f"  own account: matches {player.get('matchCount')}, recent: {json.dumps(recent, ensure_ascii=False)}"
+        )
+    except Exception as e:
+        lines.append(f"player query failed: {type(e).__name__}: {e}")
+    return lines
