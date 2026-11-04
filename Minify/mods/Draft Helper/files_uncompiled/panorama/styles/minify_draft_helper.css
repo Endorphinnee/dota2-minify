@@ -1,4 +1,4 @@
-/* g:panorama/styles/hud/dota_hud_pregame */
+/* Draft Helper panel. Included by dota_hud_pregame.xml (draft) and dashboard.xml (main menu / lobby). */
 #MDH_Root {
   horizontal-align: right;
   vertical-align: top;
@@ -402,4 +402,9 @@
 
 .MDH_Btn.MDH_Active {
   background-color: #b8862a;
+}
+
+/* Main menu / lobby: start below the dashboard's top bar */
+.MDH_Menu#MDH_Root {
+  margin-top: 150px;
 }

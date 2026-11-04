@@ -428,3 +428,47 @@ window.render = function (m) {
 </script>
 </body></html>
 """
+
+
+def parse_port(value):
+    try:
+        port = int(str(value or "").strip())
+    except ValueError:
+        return 0
+    return port if 0 < port < 65536 else 0
+
+
+def hero_names():
+    """{valve hero id: name} from the cached dotapicker data."""
+    import draft_helper_core
+
+    raw = draft_helper_core.load_cached()
+    if not raw:
+        return {}
+    info = raw["heroinfo"]
+    ids = info.get("valveids", {})
+    return {int(ids[n]): n for n in info["heronames"] if n in ids}
+
+
+def open_when_minify_is_ready(port, token, heroes, russian=True, log=None, timeout=120):
+    """Used at Minify start-up: waits for Minify's own window, then opens the player window."""
+
+    def worker():
+        try:
+            import webview
+        except Exception:
+            return
+        for _ in range(timeout):
+            if getattr(webview, "windows", None):
+                break
+            time.sleep(1)
+        else:
+            return
+        time.sleep(3)
+        try:
+            open_window(port, token, heroes, russian=russian, log=log)
+        except Exception as e:
+            if log:
+                log(f"[Draft Helper] could not open the player window: {type(e).__name__}: {e}")
+
+    threading.Thread(target=worker, name="mdh-autostart", daemon=True).start()

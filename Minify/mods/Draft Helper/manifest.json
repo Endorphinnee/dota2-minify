@@ -84,6 +84,12 @@
       "default": ""
     },
     {
+      "key": "auto_open_player_window",
+      "text": "Open the player info window when Minify starts",
+      "type": "checkbox",
+      "default": true
+    },
+    {
       "key": "open_player_window",
       "text": "Open player info window",
       "type": "button"

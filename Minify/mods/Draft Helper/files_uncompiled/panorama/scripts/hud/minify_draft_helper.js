@@ -20,13 +20,21 @@ var MinifyDraftHelper = (function () {
   const SPLIT_WIDE_THRESHOLD = 1150;
   const MIN_WIDTH = 420;
   const MAX_WIDTH = 1400;
-  const STATE_ATTRIBUTE = "minify_draft_helper_state";
+  const STATE_ATTRIBUTE_BASE = "minify_draft_helper_state";
   const TICK_SECONDS = 0.5;
   const COMMAND_NAME = "minify_draft_helper_toggle";
 
   const DATA = typeof MDH_DATA !== "undefined" ? MDH_DATA : null;
   const CFG = typeof MDH_CONFIG !== "undefined" && MDH_CONFIG ? MDH_CONFIG : {};
   const ST = DATA && DATA.stratz ? DATA.stratz : null;
+  // The same script runs in the draft screen and in the main menu / lobby (dashboard)
+  const IN_MENU = (() => {
+    try {
+      return $.GetContextPanel().paneltype === "DOTADashboard";
+    } catch (e) {
+      return false;
+    }
+  })();
   const DP_SCALE = DATA && DATA.dpScale ? DATA.dpScale : null;
   const ITEM_SLOTS = 6;
 
@@ -62,6 +70,8 @@ var MinifyDraftHelper = (function () {
       late: "Late",
       noData: "No hero data. Patch with internet access to download it.",
       spectator: "Not available for spectators.",
+      meta: "outside a match: best heroes by winrate",
+      metaPick: "pick a position",
       enemies: "enemies",
       allies: "allies",
       yourPos: "your pos",
@@ -100,6 +110,8 @@ var MinifyDraftHelper = (function () {
       late: "Позд.",
       noData: "Нет данных о героях. Пропатчьте Minify с интернетом, чтобы скачать их.",
       spectator: "Недоступно зрителям.",
+      meta: "вне матча: лучшие герои по винрейту",
+      metaPick: "выберите позицию",
       enemies: "врагов",
       allies: "союзников",
       yourPos: "ваша поз.",
@@ -139,7 +151,7 @@ var MinifyDraftHelper = (function () {
     left: 0,
     top: 0,
     collapsed: false,
-    hidden: false,
+    hidden: false, // the main menu panel starts hidden, see init()
     manualPos: 0,
     detailHero: 0,
     lastBridge: "",
@@ -272,8 +284,15 @@ var MinifyDraftHelper = (function () {
     return 0;
   }
 
+  // Outside a match (main menu, lobby) there are no picks: an empty "meta" draft ranks heroes by winrate
+  function metaDraft() {
+    return { local: -1, team: 0, allies: [], enemies: [], tentative: 0, meta: true };
+  }
+
   function readDraft() {
+    if (IN_MENU) return metaDraft();
     const local = Game.GetLocalPlayerID();
+    if (local === undefined || local < 0) return metaDraft();
     const team = Players.GetTeam(local);
     if (team !== TEAM_RADIANT && team !== TEAM_DIRE) return null;
     const enemyTeam = team === TEAM_RADIANT ? TEAM_DIRE : TEAM_RADIANT;
@@ -945,6 +964,7 @@ var MinifyDraftHelper = (function () {
       } catch (e) {}
     }
     root.SetHasClass("MDH_Collapsed", state.collapsed);
+    root.SetHasClass("MDH_Menu", IN_MENU);
     root.SetHasClass("MDH_Hidden", state.hidden);
     root.SetHasClass("MDH_Left", CFG.side === "left");
     for (let p = 0; p <= 5; p++) {
@@ -1057,11 +1077,13 @@ var MinifyDraftHelper = (function () {
       return;
     }
 
-    try {
-      emitBridge(draft);
-    } catch (e) {}
+    if (!draft.meta) {
+      try {
+        emitBridge(draft);
+      } catch (e) {}
+    }
 
-    const icons = CFG.autoPosition === false ? [] : readMinimapIcons();
+    const icons = draft.meta || CFG.autoPosition === false ? [] : readMinimapIcons();
     const positions = detectPositions(draft, icons);
     const mine = positions[draft.local];
     const autoPos = mine && mine.pos ? mine.pos : 0;
@@ -1101,6 +1123,24 @@ var MinifyDraftHelper = (function () {
       posText =
         autoPos + (mine.sure ? "" : "?") + " (" + T.auto.toLowerCase() + ": " + (T.lanes[mine.lane] || "") + ")";
     else posText = T.any + " (" + T.autoUnknown + ")";
+
+    if (draft.meta) {
+      setStatus(
+        "dotapicker " +
+          DATA.patch +
+          " · " +
+          stratzStatusText() +
+          " · " +
+          (CFG.bracketName || "") +
+          " · " +
+          T.meta +
+          " · " +
+          T.pos +
+          ": " +
+          (state.manualPos || T.metaPick),
+      );
+      return;
+    }
 
     let status =
       "dotapicker " +
@@ -1147,6 +1187,10 @@ var MinifyDraftHelper = (function () {
     return p;
   }
 
+  function stateAttribute() {
+    return STATE_ATTRIBUTE_BASE + (IN_MENU ? "_menu" : "");
+  }
+
   function saveState() {
     try {
       const data = {
@@ -1158,13 +1202,14 @@ var MinifyDraftHelper = (function () {
         collapsed: state.collapsed,
         split: state.split,
       };
-      topPanel().SetAttributeString(STATE_ATTRIBUTE, JSON.stringify(data));
+      data.hidden = state.hidden;
+      topPanel().SetAttributeString(stateAttribute(), JSON.stringify(data));
     } catch (e) {}
   }
 
   function loadState() {
     try {
-      const raw = topPanel().GetAttributeString(STATE_ATTRIBUTE, "");
+      const raw = topPanel().GetAttributeString(stateAttribute(), "");
       if (!raw) return;
       const data = JSON.parse(raw);
       if (data.scale) state.scale = clamp(data.scale, MIN_SCALE, MAX_SCALE);
@@ -1173,6 +1218,7 @@ var MinifyDraftHelper = (function () {
       state.left = data.left || 0;
       state.top = data.top || 0;
       state.collapsed = !!data.collapsed;
+      if (IN_MENU && typeof data.hidden === "boolean") state.hidden = data.hidden;
       if (typeof data.split === "boolean") state.split = data.split;
     } catch (e) {}
   }
@@ -1303,15 +1349,17 @@ var MinifyDraftHelper = (function () {
   }
 
   function registerHotkey() {
-    try {
-      Game.AddCommand(COMMAND_NAME, () => command("toggle"), "", 0);
-    } catch (e) {}
+    if (!IN_MENU) {
+      try {
+        Game.AddCommand(COMMAND_NAME, () => command("toggle"), "", 0);
+      } catch (e) {}
+    }
     const key = CFG.hotkey;
     if (!key || key === "None") return;
     try {
       $.RegisterKeyBind(ctx(), keyName(key), () => command("toggle"));
     } catch (e) {}
-    if (CFG.globalBind) {
+    if (CFG.globalBind && !IN_MENU) {
       try {
         Game.CreateCustomKeyBind(key, COMMAND_NAME);
       } catch (e) {}
@@ -1323,6 +1371,7 @@ var MinifyDraftHelper = (function () {
     if (debugEntry) debugEntry.visible = !!CFG.debug;
     const hk = el("MDH_HotkeyHint");
     if (hk) hk.text = CFG.hotkey && CFG.hotkey !== "None" ? CFG.hotkey : "";
+    if (IN_MENU) state.hidden = true;
     loadState();
     applyLayoutClasses();
     registerHotkey();

@@ -117,11 +117,8 @@ def check_stratz():
 def open_player_window():
     """Opens the always-on-top window with ping, loss and STRATZ profiles of the players in the current game."""
     settings = _settings()
-    try:
-        port = int(str(settings.get("netcon_port") or "").strip())
-    except ValueError:
-        port = 0
-    if not 0 < port < 65536:
+    port = companion.parse_port(settings.get("netcon_port"))
+    if not port:
         output.add_text(
             "Draft Helper: set the console port in the settings (the number after -netconport in Dota's launch options)",
             msg_type="error",
@@ -129,11 +126,7 @@ def open_player_window():
         return
     move_token_out_of_config(settings)
 
-    heroes = {}
-    raw = draft_helper_core.load_cached()
-    if raw:
-        info = raw["heroinfo"]
-        heroes = {int(info["valveids"][n]): n for n in info["heronames"] if n in info.get("valveids", {})}
+    heroes = companion.hero_names()
     russian = str(config.get("locale") or "").lower().startswith(("ru", "uk"))
     try:
         result = companion.open_window(port, stratz.load_token(), heroes, russian=russian, log=log.write_warning)
