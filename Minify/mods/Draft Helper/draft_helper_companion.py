@@ -172,7 +172,7 @@ def build_player_query(token):
 
 def d2pt_url(bridge):
     """
-    dota2protracker drafter link for the current draft: ?r=<hero>.<pos>,...&d=<hero>.<pos>,...
+    dota2protracker drafter link for the current draft: ?r=<hero>.<pos>%2C...&d=<hero>.<pos>%2C...
     (r = Radiant, d = Dire, hero = Valve hero id, pos = 1-5).
     """
     sides = {2: [], 3: []}
@@ -183,9 +183,9 @@ def d2pt_url(bridge):
             sides[team].append(f"{hero}.{pos}" if 1 <= pos <= 5 else str(hero))
     params = []
     if sides[2]:
-        params.append("r=" + ",".join(sides[2]))
+        params.append("r=" + "%2C".join(sides[2]))
     if sides[3]:
-        params.append("d=" + ",".join(sides[3]))
+        params.append("d=" + "%2C".join(sides[3]))
     return D2PT_DRAFTER + ("?" + "&".join(params) if params else "")
 
 
