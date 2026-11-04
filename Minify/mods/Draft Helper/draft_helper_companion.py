@@ -456,9 +456,9 @@ class Companion:
             self.window = None
         else:
             self.d2pt_window = None
+        # Keep reading the console with no window open: the buttons of the in-game panel
+        # rely on it to open the windows again. The threads end when Minify exits.
         self._windows_open -= 1
-        if self._windows_open <= 0:
-            self.stop()
 
     def open_players(self):
         import webview

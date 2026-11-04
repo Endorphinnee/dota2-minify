@@ -96,6 +96,8 @@ var MinifyDraftHelper = (function () {
       clickHint: "click a hero to see items",
       noToken: "no token",
       playersButton: "Players",
+      d2ptRequested: "Asked Minify to open the dota2protracker window. Nothing? Check that Minify is running.",
+      playersRequested: "Asked Minify to open the player stats window. Nothing? Check that Minify is running.",
       windowsNeedBridge:
         "To open the windows, enable 'Player info window' (or 'Source: dota2protracker') in the Draft Helper settings, patch, and keep Minify running with -condebug.",
       off: "off",
@@ -141,6 +143,10 @@ var MinifyDraftHelper = (function () {
       clickHint: "нажмите на героя, чтобы увидеть предметы",
       noToken: "нет токена",
       playersButton: "Игроки",
+      d2ptRequested:
+        "Запрос отправлен в Minify: открываю окно dota2protracker. Ничего не открылось? Проверьте, что Minify запущен.",
+      playersRequested:
+        "Запрос отправлен в Minify: открываю окно статистики игроков. Ничего не открылось? Проверьте, что Minify запущен.",
       windowsNeedBridge:
         "Чтобы открывать окна, включите в настройках Draft Helper «Player info window» (или «Source: dota2protracker»), сделайте патч и держите Minify открытым (нужен -condebug).",
       off: "выкл.",
@@ -1398,6 +1404,7 @@ var MinifyDraftHelper = (function () {
         return;
       }
       state.commandCounter = (state.commandCounter || 0) + 1;
+      setStatus(name === "d2pt" ? T.d2ptRequested : T.playersRequested);
       $.Msg(
         "MDH_CMD " + (name === "d2pt" ? "open_d2pt" : "open_players") + " " + Date.now() + "-" + state.commandCounter,
       );

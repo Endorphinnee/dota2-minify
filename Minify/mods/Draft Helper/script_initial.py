@@ -33,8 +33,11 @@ def main():
         settings = manifest_utils.get_effective_settings(manifest_utils.get_mod(current_dir), config.get_mod(mod_name))
         players = bool(settings.get("player_info"))
         d2pt = bool(settings.get("use_d2pt"))
-        if not ((players or d2pt) and settings.get("auto_open_player_window")):
+        if not (players or d2pt):
             return
+        # The console reader always starts so the in-game buttons can open the windows later;
+        # the windows themselves only open now when the start-up option is on.
+        auto_open = bool(settings.get("auto_open_player_window"))
 
         import draft_helper_companion as companion
         import draft_helper_stratz as stratz
@@ -46,7 +49,13 @@ def main():
         russian = str(config.get("locale") or "").lower().startswith(("ru", "uk"))
         token = stratz.load_token() if settings.get("use_stratz", True) else ""
         companion.open_when_minify_is_ready(
-            port, token, companion.hero_names(), russian=russian, log=log.write_warning, players=players, d2pt=d2pt
+            port,
+            token,
+            companion.hero_names(),
+            russian=russian,
+            log=log.write_warning,
+            players=players and auto_open,
+            d2pt=d2pt and auto_open,
         )
     except Exception as e:
         log.write_warning(f"[Draft Helper] player window autostart failed: {type(e).__name__}: {e}")
