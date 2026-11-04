@@ -73,15 +73,15 @@
     },
     {
       "key": "player_info",
-      "text": "Player info window: send players to the window (needs -netconport)",
+      "text": "Player info window: send players to the window (needs -condebug)",
       "type": "checkbox",
       "default": false
     },
     {
       "key": "netcon_port",
-      "text": "Dota console port (the number after -netconport)",
+      "text": "Dota console port (29000 for -vconsole, or your -netconport number)",
       "type": "inputbox",
-      "default": ""
+      "default": "29000"
     },
     {
       "key": "auto_open_player_window",

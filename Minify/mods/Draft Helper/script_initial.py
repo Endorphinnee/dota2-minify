@@ -39,9 +39,7 @@ def main():
 
         importlib.reload(stratz)
         importlib.reload(companion)
-        port = companion.parse_port(settings.get("netcon_port"))
-        if not port:
-            return
+        port = companion.parse_port(settings.get("netcon_port")) or companion.DEFAULT_PORT
         stratz.store_token(settings.get("stratz_token"))
         russian = str(config.get("locale") or "").lower().startswith(("ru", "uk"))
         companion.open_when_minify_is_ready(

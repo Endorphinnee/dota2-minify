@@ -117,13 +117,8 @@ def check_stratz():
 def open_player_window():
     """Opens the always-on-top window with ping, loss and STRATZ profiles of the players in the current game."""
     settings = _settings()
-    port = companion.parse_port(settings.get("netcon_port"))
-    if not port:
-        output.add_text(
-            "Draft Helper: set the console port in the settings (the number after -netconport in Dota's launch options)",
-            msg_type="error",
-        )
-        return
+    # 29000 is the port VConsole (-vconsole) uses; the console log works without any port
+    port = companion.parse_port(settings.get("netcon_port")) or companion.DEFAULT_PORT
     move_token_out_of_config(settings)
 
     heroes = companion.hero_names()

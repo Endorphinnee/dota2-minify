@@ -3,8 +3,11 @@ Player info window for the Draft Helper mod.
 
 Runs inside Minify while Dota is open:
 
-- connects to Dota's console through the official `-netconport <port>` launch option,
-- sends `status` every few seconds and reads every player's ping, packet loss and state,
+- reads Dota's console in two ways, whichever works:
+  * the console log Dota writes with the `-condebug` launch option (always passive),
+  * a TCP connection to the console port: VConsole's protocol (`-vconsole`, port 29000)
+    or plain text netcon (`-netconport`); over it `status` is sent every few seconds,
+- reads every player's ping, packet loss and state from `status`,
 - reads the `MDH_BRIDGE {...}` lines the in-game panel prints to the console
   (team, hero and Steam ID of each player: `status` only shows names),
 - asks STRATZ for each player's public profile with the user's token,
@@ -16,6 +19,7 @@ only leave the related cells empty.
 """
 
 import json
+import os
 import re
 import socket
 import sys
@@ -24,6 +28,7 @@ import time
 import types
 
 STEAM64_BASE = 76561197960265728
+DEFAULT_PORT = 29000  # VConsole's port
 BRIDGE_TAG = "MDH_BRIDGE "
 STATUS_INTERVAL = 3.0
 RECONNECT_DELAY = 5.0
@@ -66,6 +71,60 @@ def account_id(steamid):
     if value > STEAM64_BASE:
         value -= STEAM64_BASE
     return value if value > 0 else 0
+
+
+VCONSOLE_HEADER = 12  # type[4] version[4] length[2] handle[2], big endian
+VCONSOLE_CMD_VERSION = 0x00D20000
+
+
+def vconsole_command(text):
+    """A VConsole2 'CMND' frame that runs `text` in the game console."""
+    payload = text.encode("utf-8") + b"\0"
+    length = VCONSOLE_HEADER + len(payload)
+    return b"CMND" + VCONSOLE_CMD_VERSION.to_bytes(4, "big") + length.to_bytes(2, "big") + b"\0\0" + payload
+
+
+def _printable(segment):
+    return bool(segment) and all(b >= 32 or b in (9, 10, 13) for b in segment)
+
+
+def vconsole_text(payload):
+    """Text of a 'PRNT' frame: the payload starts with channel / colour fields, then a NUL-terminated string."""
+    for offset in (28, 24, 32, 20, 16, 12, 8, 4, 0):
+        segment = payload[offset:].split(b"\0", 1)[0]
+        if _printable(segment):
+            return segment.decode("utf-8", "replace")
+    return ""
+
+
+def looks_like_vconsole(data):
+    return len(data) >= 4 and all(65 <= b <= 90 for b in data[:4])
+
+
+class VConsoleReader:
+    """Splits a VConsole2 byte stream into frames and returns the printed lines."""
+
+    def __init__(self):
+        self.buffer = b""
+
+    def feed(self, chunk):
+        self.buffer += chunk
+        lines = []
+        while len(self.buffer) >= VCONSOLE_HEADER:
+            if not looks_like_vconsole(self.buffer):
+                self.buffer = self.buffer[1:]  # resync
+                continue
+            length = int.from_bytes(self.buffer[8:10], "big")
+            if length < VCONSOLE_HEADER:
+                self.buffer = self.buffer[1:]
+                continue
+            if len(self.buffer) < length:
+                break
+            kind, payload = self.buffer[:4], self.buffer[VCONSOLE_HEADER:length]
+            self.buffer = self.buffer[length:]
+            if kind == b"PRNT":
+                lines.extend(vconsole_text(payload).splitlines())
+        return lines
 
 
 class StatusParser:
@@ -117,7 +176,7 @@ class StatusParser:
 
 
 class Companion:
-    def __init__(self, port, token, heroes, russian=True, log=None):
+    def __init__(self, port, token, heroes, russian=True, log=None, log_path=""):
         self.port = port
         self.token = token
         self.heroes = heroes  # {valve hero id: display name}
@@ -127,7 +186,10 @@ class Companion:
         self.stop_event = threading.Event()
         self.window = None
         self.connected = False
+        self.protocol = ""
         self.error = ""
+        self.log_path = log_path
+        self.log_seen = 0.0  # last time the console log grew
         self.stats = {}  # account id -> dict, or None while loading / when missing
         self._query = None
         self._lock = threading.Lock()
@@ -151,6 +213,7 @@ class Companion:
         except Exception:
             pass
         threading.Thread(target=self._console_loop, name="mdh-console", daemon=True).start()
+        threading.Thread(target=self._log_loop, name="mdh-log", daemon=True).start()
         threading.Thread(target=self._stats_loop, name="mdh-stats", daemon=True).start()
 
     def stop(self, *args):
@@ -162,38 +225,90 @@ class Companion:
 
     # ------------------------------------------------------------------ console
 
+    def _feed_lines(self, lines):
+        changed = False
+        for line in lines:
+            changed |= self.parser.feed(line.rstrip("\r"))
+        if changed:
+            self.push()
+
     def _console_loop(self):
         while self.alive:
             try:
                 with socket.create_connection(("127.0.0.1", self.port), timeout=5) as sock:
-                    sock.settimeout(0.5)
-                    self.connected, self.error = True, ""
-                    self.push()
-                    buffer = b""
-                    last_status = 0.0
-                    while self.alive:
-                        if time.time() - last_status >= STATUS_INTERVAL:
-                            sock.sendall(b"status\n")
-                            last_status = time.time()
-                        try:
-                            chunk = sock.recv(65536)
-                        except socket.timeout:
-                            continue
-                        if not chunk:
-                            break
-                        buffer += chunk
-                        lines = buffer.split(b"\n")
-                        buffer = lines.pop()
-                        changed = False
-                        for raw in lines:
-                            changed |= self.parser.feed(raw.decode("utf-8", "replace").rstrip("\r"))
-                        if changed:
-                            self.push()
+                    self._serve(sock)
             except OSError as e:
                 self.error = str(e)
-            self.connected = False
+            self.connected, self.protocol = False, ""
             self.push()
             self.stop_event.wait(RECONNECT_DELAY)
+
+    def _serve(self, sock):
+        # VConsole sends binary frames right after connecting; netcon stays silent and speaks plain text
+        sock.settimeout(1.5)
+        try:
+            first = sock.recv(65536)
+        except socket.timeout:
+            first = b""
+        vconsole = looks_like_vconsole(first)
+        self.connected, self.error = True, ""
+        self.protocol = "vconsole" if vconsole else "netcon"
+        self.push()
+        reader = VConsoleReader()
+        text_buffer = b""
+        pending = first
+        last_status = 0.0
+        sock.settimeout(0.5)
+        while self.alive:
+            if time.time() - last_status >= STATUS_INTERVAL:
+                sock.sendall(vconsole_command("status") if vconsole else b"status\n")
+                last_status = time.time()
+            if pending:
+                chunk, pending = pending, b""
+            else:
+                try:
+                    chunk = sock.recv(65536)
+                except socket.timeout:
+                    continue
+                if not chunk:
+                    return
+            if vconsole:
+                self._feed_lines(reader.feed(chunk))
+            else:
+                text_buffer += chunk
+                lines = text_buffer.split(b"\n")
+                text_buffer = lines.pop()
+                self._feed_lines(raw.decode("utf-8", "replace") for raw in lines)
+
+    def _log_loop(self):
+        """Follows console.log (written by Dota with -condebug), starting at its current end."""
+        position = None
+        rest = b""
+        while self.alive:
+            try:
+                size = os.path.getsize(self.log_path) if self.log_path else -1
+            except OSError:
+                size = -1
+            if size < 0:
+                position = None
+            else:
+                if position is None or size < position:
+                    position = size if position is None else 0  # first look: skip history; truncated: restart
+                    rest = b""
+                if size > position:
+                    with open(self.log_path, "rb") as file:
+                        file.seek(position)
+                        data = file.read(size - position)
+                    position = size
+                    self.log_seen = time.time()
+                    lines = (rest + data).split(b"\n")
+                    rest = lines.pop()
+                    self._feed_lines(raw.decode("utf-8", "replace") for raw in lines)
+            self.stop_event.wait(0.5)
+
+    @property
+    def log_active(self):
+        return time.time() - self.log_seen < 60
 
     # ------------------------------------------------------------------ STRATZ
 
@@ -278,6 +393,9 @@ class Companion:
             connection = "connecting"
         return {
             "connected": self.connected,
+            "protocol": self.protocol,
+            "logActive": self.log_active,
+            "logPath": self.log_path,
             "connection": connection,
             "port": self.port,
             "matchId": self.parser.match_id,
@@ -331,6 +449,18 @@ class Companion:
             pass
 
 
+def console_log_path():
+    """Where Dota writes the console with -condebug: <library>/steamapps/common/dota 2 beta/game/dota/console.log"""
+    try:
+        from core import steam
+
+        if steam.LIBRARY:
+            return os.path.join(steam.LIBRARY, "steamapps", "common", "dota 2 beta", "game", "dota", "console.log")
+    except Exception:
+        pass
+    return ""
+
+
 def open_window(port, token, heroes, russian=True, log=None):
     """Opens the window, or reuses the one already open. Returns a short status string."""
     current = getattr(_store, "companion", None)
@@ -341,7 +471,7 @@ def open_window(port, token, heroes, russian=True, log=None):
         except Exception:
             pass
         return "already open"
-    companion = Companion(port, token, heroes, russian=russian, log=log)
+    companion = Companion(port, token, heroes, russian=russian, log=log, log_path=console_log_path())
     companion.start()
     _store.companion = companion
     return "opened"
@@ -401,17 +531,19 @@ function table(rows) {
 }
 window.render = function (m) {
   window.__ru = m.russian;
-  document.getElementById("conn").innerHTML = m.connected
-    ? "<span class=good>" + L("консоль подключена","console connected") + "</span>"
-    : "<span class=bad>" + L("нет связи с консолью Доты (порт ","no Dota console (port ") + m.port + "): " + esc(m.connection) + "</span>";
+  const parts = [];
+  if (m.connected) parts.push("<span class=good>" + L("консоль подключена","console connected") + " (" + esc(m.protocol) + ", " + m.port + ")</span>");
+  else parts.push("<span class=muted>" + L("порт ","port ") + m.port + L(": нет связи",": not connected") + "</span>");
+  parts.push(m.logActive ? "<span class=good>console.log ✓</span>" : "<span class=muted>console.log —</span>");
+  document.getElementById("conn").innerHTML = parts.join(" · ");
   document.getElementById("match").textContent = m.matchId ? L("матч ","match ") + m.matchId + (m.gameState ? " · " + m.gameState : "") : "";
   document.getElementById("upd").textContent = m.time;
   const main = document.getElementById("main");
   if (!m.players.length) {
-    main.innerHTML = "<div class=hint>" + (m.connected
+    main.innerHTML = "<div class=hint>" + ((m.connected || m.logActive)
       ? L("Ждём игру: данные появятся, когда начнётся загрузка или драфт.", "Waiting for a game: data appears once loading or the draft starts.")
-      : L("Запустите Доту с параметром -netconport ", "Start Dota with -netconport ") + m.port +
-        L(" и укажите тот же порт в настройках Draft Helper.", " and set the same port in the Draft Helper settings.")) + "</div>";
+      : L("Нет связи с Дотой. Добавьте в параметры запуска Доты <b>-condebug</b> (герои и профили) и <b>-vconsole</b> (пинг в фоне), перезапустите Доту. Окно подключится само.",
+          "No link to Dota. Add <b>-condebug</b> (heroes and profiles) and <b>-vconsole</b> (background ping) to Dota's launch options and restart Dota. The window connects by itself.")) + "</div>";
     return;
   }
   const groups = { ally: [], enemy: [], other: [] };
@@ -420,6 +552,7 @@ window.render = function (m) {
   if (groups.ally.length) h += "<h3 class=ally>" + L("Союзники","Allies") + "</h3>" + table(groups.ally);
   if (groups.enemy.length) h += "<h3 class=enemy>" + L("Враги","Enemies") + "</h3>" + table(groups.enemy);
   if (groups.other.length) h += "<h3 class=other>" + L("Игроки","Players") + "</h3>" + table(groups.other);
+  if (!m.connected && !m.players.some(p => p.ping != null)) h += "<div class=hint>" + L("Пинг появится, когда окно подключится к консоли (-vconsole) или когда в консоли выполнится status.", "Ping appears once the window reaches the console (-vconsole) or when status runs in the console.") + "</div>";
   if (!m.bridge) h += "<div class=hint>" + L("Герои и профили появятся, когда панель Draft Helper загрузится на экране драфта (включите «Player info window» в настройках и перепатчьте).",
                                                    "Heroes and profiles appear once the Draft Helper panel loads in the draft (enable “Player info window” and patch again).") + "</div>";
   else if (!m.token) h += "<div class=hint>" + L("Для рангов и винрейта нужен токен STRATZ.", "A STRATZ token is needed for ranks and winrates.") + "</div>";
