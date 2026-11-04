@@ -15,12 +15,14 @@ if current_dir not in sys.path:
 
 import importlib
 
+import draft_helper_companion as companion
 import draft_helper_core
 import draft_helper_stratz as stratz
 
 # Minify keeps imported modules for its whole session; reload so an updated mod is used without a restart
 importlib.reload(stratz)
 importlib.reload(draft_helper_core)
+importlib.reload(companion)
 from core import base, config, log, output
 from patch import manifest_utils
 
@@ -110,3 +112,38 @@ def check_stratz():
         output.add_text("Draft Helper: STRATZ data downloaded. Patch to put it into the game.", msg_type="success")
     else:
         output.add_text("Draft Helper: STRATZ download failed, see logs/warnings.txt", msg_type="error")
+
+
+def open_player_window():
+    """Opens the always-on-top window with ping, loss and STRATZ profiles of the players in the current game."""
+    settings = _settings()
+    try:
+        port = int(str(settings.get("netcon_port") or "").strip())
+    except ValueError:
+        port = 0
+    if not 0 < port < 65536:
+        output.add_text(
+            "Draft Helper: set the console port in the settings (the number after -netconport in Dota's launch options)",
+            msg_type="error",
+        )
+        return
+    move_token_out_of_config(settings)
+
+    heroes = {}
+    raw = draft_helper_core.load_cached()
+    if raw:
+        info = raw["heroinfo"]
+        heroes = {int(info["valveids"][n]): n for n in info["heronames"] if n in info.get("valveids", {})}
+    russian = str(config.get("locale") or "").lower().startswith(("ru", "uk"))
+    try:
+        result = companion.open_window(port, stratz.load_token(), heroes, russian=russian, log=log.write_warning)
+    except Exception as e:
+        log.write_warning(f"[Draft Helper] could not open the player window: {type(e).__name__}: {e}")
+        output.add_text("Draft Helper: could not open the player window, see logs/warnings.txt", msg_type="error")
+        return
+    output.add_text(f"Draft Helper: player window {result} (console port {port})", msg_type="success")
+    if not settings.get("player_info"):
+        output.add_text(
+            "Draft Helper: enable 'Player info window' and patch, otherwise heroes and profiles stay empty",
+            msg_type="warning",
+        )

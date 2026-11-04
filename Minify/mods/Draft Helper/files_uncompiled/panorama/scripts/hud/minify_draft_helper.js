@@ -142,6 +142,8 @@ var MinifyDraftHelper = (function () {
     hidden: false,
     manualPos: 0,
     detailHero: 0,
+    lastBridge: "",
+    lastBridgeTime: 0,
     itemSlots: [],
     split: !!CFG.split,
     tables: {},
@@ -1008,6 +1010,37 @@ var MinifyDraftHelper = (function () {
 
   // ------------------------------------------------------------------ main loop
 
+  // Prints the players (team, hero, Steam ID) to the console for the player info window in Minify,
+  // which reads the console through -netconport. `status` alone only has names, ping and loss.
+  function emitBridge(draft) {
+    if (!CFG.bridge) return;
+    const players = [];
+    draft.allies.concat(draft.enemies).forEach((p) => {
+      let info = null;
+      try {
+        info = Game.GetPlayerInfo(p.pid);
+      } catch (e) {}
+      let name = "";
+      try {
+        name = (info && info.player_name) || Players.GetPlayerName(p.pid) || "";
+      } catch (e) {}
+      players.push({
+        pid: p.pid,
+        team: Players.GetTeam(p.pid),
+        name: name,
+        steamid: info && info.player_steamid ? String(info.player_steamid) : "",
+        hero: p.hero || 0,
+        local: !!p.local,
+      });
+    });
+    const text = JSON.stringify({ localTeam: draft.team, players: players });
+    const now = Date.now() / 1000;
+    if (text === state.lastBridge && now - state.lastBridgeTime < 5) return;
+    state.lastBridge = text;
+    state.lastBridgeTime = now;
+    $.Msg("MDH_BRIDGE " + text);
+  }
+
   function update(force) {
     if (!DATA) {
       setStatus(T.noData);
@@ -1023,6 +1056,10 @@ var MinifyDraftHelper = (function () {
       setStatus(T.spectator);
       return;
     }
+
+    try {
+      emitBridge(draft);
+    } catch (e) {}
 
     const icons = CFG.autoPosition === false ? [] : readMinimapIcons();
     const positions = detectPositions(draft, icons);

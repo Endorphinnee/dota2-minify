@@ -209,6 +209,7 @@ def build_config(settings):
         "debug": bool(settings.get("debug", False)),
         "autoPosition": bool(settings.get("auto_position", True)),
         "split": bool(settings.get("split_view", False)),
+        "bridge": bool(settings.get("player_info", False)),
     }
 
 

@@ -70,6 +70,23 @@
       "key": "check_stratz",
       "text": "Check STRATZ connection",
       "type": "button"
+    },
+    {
+      "key": "player_info",
+      "text": "Player info window: send players to the window (needs -netconport)",
+      "type": "checkbox",
+      "default": false
+    },
+    {
+      "key": "netcon_port",
+      "text": "Dota console port (the number after -netconport)",
+      "type": "inputbox",
+      "default": ""
+    },
+    {
+      "key": "open_player_window",
+      "text": "Open player info window",
+      "type": "button"
     }
   ]
 }
