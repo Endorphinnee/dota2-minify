@@ -126,7 +126,8 @@ def open_player_window():
     heroes = companion.hero_names()
     russian = str(config.get("locale") or "").lower().startswith(("ru", "uk"))
     try:
-        result = companion.open_window(port, stratz.load_token(), heroes, russian=russian, log=log.write_warning)
+        token = stratz.load_token() if settings.get("use_stratz", True) else ""
+        result = companion.open_window(port, token, heroes, russian=russian, log=log.write_warning)
     except Exception as e:
         log.write_warning(f"[Draft Helper] could not open the player window: {type(e).__name__}: {e}")
         output.add_text("Draft Helper: could not open the player window, see logs/warnings.txt", msg_type="error")

@@ -210,6 +210,8 @@ def build_config(settings):
         "autoPosition": bool(settings.get("auto_position", True)),
         "split": bool(settings.get("split_view", False)),
         "bridge": bool(settings.get("player_info", False)),
+        "useDp": bool(settings.get("use_dotapicker", True)),
+        "useSt": bool(settings.get("use_stratz", True)),
     }
 
 
@@ -249,8 +251,8 @@ def generate(settings, refresh=True, force_stratz=False, log=None):
     if dataset is None:
         status = "missing"
 
-    stratz_status = "missing"
-    if dataset is not None:
+    stratz_status = "missing" if config["useSt"] else "off"
+    if dataset is not None and config["useSt"]:
         try:
             hero_ids = [h["id"] for h in dataset["heroes"] if h["id"]]
             token = stratz.load_token()

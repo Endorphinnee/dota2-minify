@@ -42,9 +42,8 @@ def main():
         port = companion.parse_port(settings.get("netcon_port")) or companion.DEFAULT_PORT
         stratz.store_token(settings.get("stratz_token"))
         russian = str(config.get("locale") or "").lower().startswith(("ru", "uk"))
-        companion.open_when_minify_is_ready(
-            port, stratz.load_token(), companion.hero_names(), russian=russian, log=log.write_warning
-        )
+        token = stratz.load_token() if settings.get("use_stratz", True) else ""
+        companion.open_when_minify_is_ready(port, token, companion.hero_names(), russian=russian, log=log.write_warning)
     except Exception as e:
         log.write_warning(f"[Draft Helper] player window autostart failed: {type(e).__name__}: {e}")
 

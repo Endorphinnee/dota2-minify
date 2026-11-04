@@ -42,7 +42,11 @@ GAME_STATE = re.compile(r"GameState:\s*(\S+)")
 PLAYER_FIELDS = ("matchCount", "winCount", "firstMatchDate", "lastMatchDate")
 ACCOUNT_FIELDS = ("name", "seasonRank", "isAnonymous", "smurfFlag", "isStratzPublic")
 
-RECENT_MATCHES = 25
+RECENT_MATCHES = 40  # asked for; tournament, lobby and old games are dropped afterwards
+RECENT_DAYS = 60
+MATCH_FIELDS = ("startDateTime", "leagueId", "lobbyType")
+# Lobby types that are not public games (tournaments, private lobbies, bots, tutorials...)
+NON_PUBLIC_LOBBIES = ("PRACTICE", "TOURNAMENT", "TUTORIAL", "COOP_VS_BOTS", "LOCAL", "SPECTATOR", "EVENT", "TEAM_MATCH")
 RECENT_FIELDS = ("heroId", "position", "isVictory", "imp", "kills", "deaths", "assists")
 SPAM_SHARE = 0.4  # one hero in at least 40% of the recent games...
 SPAM_MIN_GAMES = 6  # ...and at least this many games
@@ -143,11 +147,22 @@ def build_player_query(token):
                 notes.append(f"recent games: {players['type']} has no 'heroId'")
             else:
                 args = "(steamAccountId: $id)" if by_id else ""
+                # Server-side filters when the request type supports them, client-side filtering covers the rest
+                filters = [f"take: {RECENT_MATCHES}"]
+                if "isLeague" in request_inputs:
+                    filters.append("isLeague: false")
+                if "startDateTime" in request_inputs:
+                    filters.append(f"startDateTime: {int(time.time()) - RECENT_DAYS * 86400}")
+                match_extra = [f for f in MATCH_FIELDS if match_fields.get(f, {}).get("kind") in SCALAR_KINDS]
                 recent_part = (
-                    f" matches(request: {{take: {RECENT_MATCHES}}}) {{ players{args} {{ {' '.join(wanted)} }} }}"
+                    f" matches(request: {{{', '.join(filters)}}}) {{ {' '.join(match_extra)} "
+                    f"players{args} {{ {' '.join(wanted)} }} }}"
                 )
                 missing = [f for f in RECENT_FIELDS if f not in wanted]
                 notes.append("recent games: ok" + (f" (missing: {', '.join(missing)})" if missing else ""))
+                notes.append(
+                    f"recent filters: request [{', '.join(filters)}], match fields [{', '.join(match_extra) or '-'}]"
+                )
 
     body = " ".join(scalar) + account_part + recent_part
     return "query ($id: Long!) { player(steamAccountId: $id) { " + body + " } }", notes
@@ -162,15 +177,28 @@ def summarize_recent(matches, aid, heroes, current_hero=0, keys=None):
     """Top heroes, spam flag, last 3 games and average IMP / winrate from the player's recent matches
     (STRATZ returns the newest match first)."""
     keys = keys or {}
+    if not matches:
+        # STRATZ returns no matches when the player hides their match data
+        return {"games": 0, "reason": "hidden"}
+    oldest = time.time() - RECENT_DAYS * 86400
     games = []
-    for match in matches or []:
-        for p in (match or {}).get("players") or []:
+    for match in matches:
+        match = match or {}
+        if match.get("leagueId"):
+            continue  # tournament game
+        if str(match.get("lobbyType") or "").upper() in NON_PUBLIC_LOBBIES:
+            continue
+        started = match.get("startDateTime")
+        if isinstance(started, (int, float)) and started < oldest:
+            continue
+        for p in match.get("players") or []:
             if p.get("steamAccountId") in (None, aid) and p.get("heroId"):
                 games.append(p)
                 break
+    games = games[:25]
     n = len(games)
     if not n:
-        return None
+        return {"games": 0, "reason": "old"}
     wins = sum(1 for g in games if g.get("isVictory"))
     imps = [g["imp"] for g in games if isinstance(g.get("imp"), (int, float))]
     kills = sum(g.get("kills") or 0 for g in games)
@@ -691,6 +719,12 @@ function medal(r) {
 function details(r) {
   const s = r.recent;
   if (!s) return "";
+  if (!s.games) {
+    const msg = s.reason === "hidden"
+      ? L("Игры скрыты: игрок не открыл статистику матчей.", "Games are hidden: the player does not share match data.")
+      : L("Нет свежих публичных игр за последние 60 дней (турниры и лобби не считаются).", "No recent public games in the last 60 days (tournaments and lobbies are not counted).");
+    return "<tr class=details><td colspan=8 class=muted>" + msg + "</td></tr>";
+  }
   const top = s.top.map(t => "<div class=line>" + heroIcon(t.key, t.hero) + t.games + L(" игр", " g") + " · " +
     "<span class='" + wrClass(t.winrate) + "'>" + t.winrate + "%</span>" + (t.pos ? " · " + L("поз. ", "pos ") + t.pos : "") +
     (t.imp != null ? " · IMP <span class='" + impClass(t.imp) + "'>" + signed(t.imp) + "</span>" : "") +

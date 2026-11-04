@@ -63,6 +63,8 @@ def main():
         output.add_text("Draft Helper: STRATZ data updated", msg_type="success", indent=True)
     elif stratz_status == "cached":
         output.add_text("Draft Helper: STRATZ data from cache (refreshed every 12h)", indent=True)
+    elif stratz_status == "off":
+        output.add_text("Draft Helper: STRATZ is turned off in the settings", indent=True)
     elif stratz.load_token():
         output.add_text("Draft Helper: STRATZ data unavailable, see logs/warnings.txt", msg_type="warning", indent=True)
 

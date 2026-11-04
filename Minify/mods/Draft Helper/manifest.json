@@ -1,6 +1,18 @@
 {
   "settings": [
     {
+      "key": "use_dotapicker",
+      "text": "Source: dotapicker",
+      "type": "checkbox",
+      "default": true
+    },
+    {
+      "key": "use_stratz",
+      "text": "Source: STRATZ (needs a token)",
+      "type": "checkbox",
+      "default": true
+    },
+    {
       "key": "bracket",
       "text": "Rank (STRATZ / dotapicker)",
       "type": "combo",

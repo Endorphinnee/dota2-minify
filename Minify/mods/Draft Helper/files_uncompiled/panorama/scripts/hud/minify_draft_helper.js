@@ -27,6 +27,8 @@ var MinifyDraftHelper = (function () {
   const DATA = typeof MDH_DATA !== "undefined" ? MDH_DATA : null;
   const CFG = typeof MDH_CONFIG !== "undefined" && MDH_CONFIG ? MDH_CONFIG : {};
   const ST = DATA && DATA.stratz ? DATA.stratz : null;
+  // Sources can be turned off in the mod settings; dotapicker's hero list is still used as the hero dictionary
+  const USE_DP = CFG.useDp !== false;
   // The same script runs in the draft screen and in the main menu / lobby (dashboard)
   const IN_MENU = (() => {
     try {
@@ -93,6 +95,8 @@ var MinifyDraftHelper = (function () {
       matches: "matches",
       clickHint: "click a hero to see items",
       noToken: "no token",
+      off: "off",
+      allOff: "All sources are turned off in the mod settings.",
       tooltipTotalOne: "Total = vs enemies + with allies, this source only",
     },
     russian: {
@@ -133,6 +137,8 @@ var MinifyDraftHelper = (function () {
       matches: "матчей",
       clickHint: "нажмите на героя, чтобы увидеть предметы",
       noToken: "нет токена",
+      off: "выкл.",
+      allOff: "Все источники выключены в настройках мода.",
       tooltipTotalOne: "Итог = против врагов + с союзниками, только этот источник",
     },
   };
@@ -493,7 +499,9 @@ var MinifyDraftHelper = (function () {
   // ------------------------------------------------------------------ scoring
 
   // source: "all" (both sources combined), "dp" (dotapicker only) or "st" (STRATZ only)
-  function recommend(draft, pos, source) {
+  function recommend(draft, pos, requested) {
+    // Without dotapicker the combined list is the STRATZ list
+    const source = requested === "all" && !USE_DP ? "st" : requested;
     const n = DATA.n;
     const taken = {};
     const allyIdx = [];
@@ -915,7 +923,12 @@ var MinifyDraftHelper = (function () {
     }
   }
 
+  function dotapickerStatusText() {
+    return USE_DP ? "dotapicker " + DATA.patch : "dotapicker: " + T.off;
+  }
+
   function stratzStatusText() {
+    if (CFG.useSt === false) return "STRATZ: " + T.off;
     if (ST) return "STRATZ " + (CFG.stratzBracket || "");
     if (CFG.stratzError) return T.stMissing + " (" + CFG.stratzError + ")";
     if (!CFG.stratzToken) return T.stMissing + " (" + T.noToken + ")";
@@ -948,7 +961,7 @@ var MinifyDraftHelper = (function () {
     try {
       win.style.width = state.width + "px";
     } catch (e) {}
-    const splitNow = state.split && !!ST;
+    const splitNow = state.split && !!ST && USE_DP;
     root.SetHasClass("MDH_Wide", state.width >= (splitNow ? SPLIT_WIDE_THRESHOLD : WIDE_THRESHOLD));
     root.SetHasClass("MDH_Split", splitNow);
     const split = el("MDH_BtnSplit");
@@ -1103,7 +1116,17 @@ var MinifyDraftHelper = (function () {
 
     const list2 = el("MDH_List2");
     let itemResults;
-    if (state.split && ST) {
+    if (!USE_DP && !ST) {
+      setStatus(T.allOff);
+      return;
+    }
+    if (!USE_DP || !ST) {
+      // Only one source is active: show its own list
+      const only = USE_DP ? "dp" : "st";
+      itemResults = recommend(draft, pos, only);
+      renderTable("MDH_List", only, itemResults);
+      if (list2) list2.visible = false;
+    } else if (state.split) {
       renderTable("MDH_List", "dp", recommend(draft, pos, "dp"));
       itemResults = recommend(draft, pos, "st");
       renderTable("MDH_List2", "st", itemResults);
@@ -1126,8 +1149,7 @@ var MinifyDraftHelper = (function () {
 
     if (draft.meta) {
       setStatus(
-        "dotapicker " +
-          DATA.patch +
+        dotapickerStatusText() +
           " · " +
           stratzStatusText() +
           " · " +
@@ -1143,8 +1165,7 @@ var MinifyDraftHelper = (function () {
     }
 
     let status =
-      "dotapicker " +
-      DATA.patch +
+      dotapickerStatusText() +
       " · " +
       stratzStatusText() +
       " · " +
