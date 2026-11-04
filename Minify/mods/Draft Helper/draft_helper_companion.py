@@ -55,6 +55,15 @@ RANKS_EN = ("Uncalibrated", "Herald", "Guardian", "Crusader", "Archon", "Legend"
 _store = sys.modules.setdefault("_minify_draft_helper_companion", types.ModuleType("_minify_draft_helper_companion"))
 
 
+def rank_parts(season_rank):
+    """(medal 0-8, stars 0-5) from STRATZ's seasonRank (e.g. 54 = Legend 4)."""
+    try:
+        medal, stars = divmod(int(season_rank), 10)
+    except (TypeError, ValueError):
+        return None, 0
+    return (medal, stars) if 0 <= medal <= 8 else (None, 0)
+
+
 def rank_text(season_rank, russian=True):
     try:
         value = int(season_rank)
@@ -149,8 +158,10 @@ def _position_number(value):
     return int(text[-1]) if text.startswith("POSITION_") and text[-1].isdigit() else 0
 
 
-def summarize_recent(matches, aid, heroes, current_hero=0):
-    """Top heroes, spam flag, average IMP / KDA / winrate from the player's recent matches."""
+def summarize_recent(matches, aid, heroes, current_hero=0, keys=None):
+    """Top heroes, spam flag, last 3 games and average IMP / winrate from the player's recent matches
+    (STRATZ returns the newest match first)."""
+    keys = keys or {}
     games = []
     for match in matches or []:
         for p in (match or {}).get("players") or []:
@@ -184,6 +195,7 @@ def summarize_recent(matches, aid, heroes, current_hero=0):
         top.append(
             {
                 "hero": heroes.get(hero_id, f"#{hero_id}"),
+                "key": keys.get(hero_id, ""),
                 "games": h["n"],
                 "winrate": round(h["wins"] / h["n"] * 100),
                 "pos": main_pos,
@@ -191,8 +203,24 @@ def summarize_recent(matches, aid, heroes, current_hero=0):
                 "spam": h["n"] >= SPAM_MIN_GAMES and h["n"] / n >= SPAM_SHARE,
             }
         )
+    last = []
+    for g in games[:3]:
+        hero_id = int(g["heroId"])
+        last.append(
+            {
+                "hero": heroes.get(hero_id, f"#{hero_id}"),
+                "key": keys.get(hero_id, ""),
+                "k": g.get("kills") if has_kda else None,
+                "d": g.get("deaths") if has_kda else None,
+                "a": g.get("assists") if has_kda else None,
+                "win": bool(g.get("isVictory")),
+                "imp": g.get("imp") if isinstance(g.get("imp"), (int, float)) else None,
+                "pos": _position_number(g.get("position")),
+            }
+        )
     current = by_hero.get(int(current_hero or 0))
     return {
+        "last": last,
         "games": n,
         "wins": wins,
         "winrate": round(wins / n * 100),
@@ -311,6 +339,10 @@ class Companion:
         self.port = port
         self.token = token
         self.heroes = heroes  # {valve hero id: display name}
+        try:
+            self.hero_keys = hero_keys()  # {valve hero id: short name used by Valve's image CDN}
+        except Exception:
+            self.hero_keys = {}
         self.russian = russian
         self.log = log
         self.parser = StatusParser()
@@ -333,8 +365,8 @@ class Companion:
         self.window = webview.create_window(
             "Draft Helper",
             html=WINDOW_HTML,
-            width=900,
-            height=620,
+            width=960,
+            height=680,
             resizable=True,
             on_top=True,
         )
@@ -532,6 +564,7 @@ class Companion:
             "side": side,
             "local": bool(local),
             "hero": self.heroes.get(int(hero or 0), ""),
+            "heroKey": self.hero_keys.get(int(hero or 0), ""),
             "ping": status.get("ping"),
             "loss": status.get("loss"),
             "state": status.get("state", ""),
@@ -546,12 +579,14 @@ class Companion:
             row.update(
                 {
                     "rank": rank_text(account.get("seasonRank"), self.russian),
+                    "medal": rank_parts(account.get("seasonRank"))[0],
+                    "stars": rank_parts(account.get("seasonRank"))[1],
                     "matches": matches,
                     "winrate": round(wins / matches * 100, 1) if matches else None,
                     "private": bool(account.get("isAnonymous")) or account.get("isStratzPublic") is False,
                     "smurf": bool(account.get("smurfFlag")),
                     "error": stats.get("error", ""),
-                    "recent": summarize_recent(stats.get("matches"), aid, self.heroes, hero),
+                    "recent": summarize_recent(stats.get("matches"), aid, self.heroes, hero, self.hero_keys),
                 }
             )
         return row
@@ -614,7 +649,17 @@ WINDOW_HTML = r"""<!doctype html>
   .tag { font-size: 11px; padding: 0 5px; border-radius: 3px; background: #ffffff14; margin-left: 4px; }
   .tag.smurf { background: #e8695a33; color: #ffb3a8; }
   .hint { color: #8a96a3; padding: 12px 0; white-space: normal; }
-  tr.details td { padding: 0 6px 6px 18px; border-bottom: 1px solid #ffffff14; color: #9fb0bf; font-size: 12px; white-space: normal; }
+  tr.details td { padding: 2px 6px 8px 18px; border-bottom: 1px solid #ffffff14; color: #9fb0bf; font-size: 12px; white-space: normal; }
+  .det { display: flex; gap: 22px; }
+  .det .col { min-width: 0; }
+  .det .ct { color: #6b7782; font-size: 11px; text-transform: uppercase; letter-spacing: .5px; margin-bottom: 2px; }
+  .det .line { display: flex; align-items: center; gap: 6px; height: 22px; white-space: nowrap; }
+  img.hi { width: 26px; height: 26px; border-radius: 3px; object-fit: cover; background: #ffffff10; }
+  img.hm { width: 30px; height: 30px; border-radius: 3px; object-fit: cover; vertical-align: middle; background: #ffffff10; }
+  .kda { font-family: Consolas, "Cascadia Mono", monospace; color: #d6dde4; min-width: 64px; display: inline-block; }
+  .wl { font-weight: 600; width: 14px; display: inline-block; }
+  .medal { position: relative; display: inline-block; width: 34px; height: 34px; vertical-align: middle; }
+  .medal img { position: absolute; inset: 0; width: 34px; height: 34px; }
   .hero { color: #d6dde4; }
   .tag.spam { background: #e8c76a33; color: #f3d98b; }
   .tag.comfort { background: #7fd36b26; color: #a9e69b; }
@@ -630,28 +675,47 @@ function esc(s) { return String(s == null ? "" : s).replace(/[&<>"]/g, c => ({"&
 function pingClass(p) { return p == null ? "muted" : p >= 120 ? "bad" : p >= 70 ? "warn" : "good"; }
 function impClass(v) { return v == null ? "muted" : v >= 5 ? "good" : v <= -5 ? "bad" : ""; }
 function signed(v) { return v == null ? "—" : (v > 0 ? "+" : "") + v; }
+const HERO_ICON = "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/icons/";
+const RANK_IMG = "https://cdn.stratz.com/images/dota2/seasonal_rank/";
+function heroIcon(key, name, cls) {
+  if (!key) return "<span class=muted>" + esc(name || "") + "</span>";
+  return "<img class=" + (cls || "hi") + " src='" + HERO_ICON + esc(key) + ".png' title='" + esc(name) + "' alt='" + esc(name) +
+         "' onerror=\"this.replaceWith(document.createTextNode(this.alt))\">";
+}
+function medal(r) {
+  if (r.medal == null) return esc(r.rank || "");
+  let h = "<span class=medal title='" + esc(r.rank) + "'><img src='" + RANK_IMG + "medal_" + r.medal + ".png' onerror=\"this.parentNode.textContent=this.parentNode.title\">";
+  if (r.stars >= 1 && r.stars <= 5 && r.medal >= 1 && r.medal <= 7) h += "<img src='" + RANK_IMG + "star_" + r.stars + ".png' onerror='this.remove()'>";
+  return h + "</span>";
+}
 function details(r) {
   const s = r.recent;
   if (!s) return "";
-  const top = s.top.map(t =>
-    "<span class=hero>" + esc(t.hero) + "</span> " + t.games + L(" игр", " g") + " · " + t.winrate + "%" +
-    (t.pos ? " · " + L("поз. ", "pos ") + t.pos : "") +
+  const top = s.top.map(t => "<div class=line>" + heroIcon(t.key, t.hero) + t.games + L(" игр", " g") + " · " +
+    "<span class='" + wrClass(t.winrate) + "'>" + t.winrate + "%</span>" + (t.pos ? " · " + L("поз. ", "pos ") + t.pos : "") +
     (t.imp != null ? " · IMP <span class='" + impClass(t.imp) + "'>" + signed(t.imp) + "</span>" : "") +
-    (t.spam ? "<span class='tag spam'>" + L("спамит", "spams") + "</span>" : "")).join(" &nbsp;|&nbsp; ");
-  let line = L("Топ за ", "Top of last ") + s.games + L(" игр: ", " games: ") + top;
-  let skill = "IMP <b class='" + impClass(s.imp) + "'>" + signed(s.imp) + "</b>";
-  if (s.kda != null) skill += " · KDA " + s.kda;
-  skill += " · " + s.wins + "-" + (s.games - s.wins) + " (<span class='" + wrClass(s.winrate) + "'>" + s.winrate + "%</span>)";
+    (t.spam ? "<span class='tag spam'>" + L("спамит", "spams") + "</span>" : "") + "</div>").join("");
+  const last = (s.last || []).map(g => "<div class=line>" + heroIcon(g.key, g.hero) +
+    "<span class=kda>" + (g.k == null ? "—" : g.k + "/" + g.d + "/" + g.a) + "</span>" +
+    "<span class='wl " + (g.win ? "good" : "bad") + "'>" + (g.win ? L("В", "W") : L("П", "L")) + "</span>" +
+    (g.imp != null ? "IMP <span class='" + impClass(g.imp) + "'>" + signed(g.imp) + "</span>" : "") + "</div>").join("");
+  let form = "<div class=line>IMP <b class='" + impClass(s.imp) + "'>" + signed(s.imp) + "</b></div>" +
+    "<div class=line>" + s.wins + "-" + (s.games - s.wins) + " (<span class='" + wrClass(s.winrate) + "'>" + s.winrate + "%</span>)</div>";
   if (r.hero) {
-    if (s.currentGames >= 3) skill += "<span class='tag comfort'>" + esc(r.hero) + ": " + s.currentGames + L(" игр, ", " g, ") + s.currentWinrate + "%</span>";
-    else skill += "<span class='tag new'>" + esc(r.hero) + L(": мало игр", ": few games") + " (" + s.currentGames + ")</span>";
+    form += "<div class=line>" + heroIcon(r.heroKey, r.hero) + (s.currentGames >= 3
+      ? "<span class='tag comfort'>" + s.currentGames + L(" игр, ", " g, ") + s.currentWinrate + "%</span>"
+      : "<span class='tag new'>" + L("мало игр", "few games") + " (" + s.currentGames + ")</span>") + "</div>";
   }
-  return "<tr class=details><td colspan=8>" + line + "<br>" + L("Последние игры: ", "Recent games: ") + skill + "</td></tr>";
+  return "<tr class=details><td colspan=8><div class=det>" +
+    "<div class=col><div class=ct>" + L("Топ героев · ", "Top heroes · ") + s.games + L(" игр", " games") + "</div>" + top + "</div>" +
+    "<div class=col><div class=ct>" + L("Последние 3 игры", "Last 3 games") + "</div>" + last + "</div>" +
+    "<div class=col><div class=ct>" + L("Форма", "Form") + "</div>" + form + "</div>" +
+    "</div></td></tr>";
 }
 function wrClass(w) { return w == null ? "muted" : w >= 52 ? "good" : w <= 48 ? "bad" : ""; }
 function table(rows) {
-  let h = "<table><colgroup><col style='width:23%'><col style='width:17%'><col style='width:7%'><col style='width:8%'>" +
-          "<col style='width:10%'><col style='width:19%'><col style='width:8%'><col style='width:8%'></colgroup><tr><th>" + L("Игрок","Player") + "</th><th>" + L("Герой","Hero") + "</th><th class=num>" + L("Пинг","Ping") +
+  let h = "<table><colgroup><col style='width:26%'><col style='width:8%'><col style='width:8%'><col style='width:8%'>" +
+          "<col style='width:12%'><col style='width:18%'><col style='width:10%'><col style='width:10%'></colgroup><tr><th>" + L("Игрок","Player") + "</th><th>" + L("Герой","Hero") + "</th><th class=num>" + L("Пинг","Ping") +
           "</th><th class=num>" + L("Потери","Loss") + "</th><th>" + L("Статус","State") + "</th><th>" + L("Ранг","Rank") +
           "</th><th class=num>" + L("Матчи","Matches") + "</th><th class=num>WR</th></tr>";
   for (const r of rows) {
@@ -661,12 +725,12 @@ function table(rows) {
     else if (r.loading) profile = "<td colspan=3 class=muted>" + L("загрузка…","loading…") + "</td>";
     else if (r.error) profile = "<td colspan=3 class=bad>" + esc(r.error) + "</td>";
     else if (r.private) profile = "<td colspan=3 class=muted>" + L("профиль скрыт","private profile") + "</td>";
-    else if (r.matches != null) profile = "<td>" + esc(r.rank) + (r.smurf ? "<span class='tag smurf'>" + L("смурф?","smurf?") + "</span>" : "") +
+    else if (r.matches != null) profile = "<td>" + medal(r) + (r.smurf ? "<span class='tag smurf'>" + L("смурф?","smurf?") + "</span>" : "") +
         "</td><td class=num>" + r.matches + "</td><td class='num " + wrClass(r.winrate) + "'>" + (r.winrate == null ? "—" : r.winrate.toFixed(1) + "%") + "</td>";
     else profile = "<td colspan=3 class=muted>—</td>";
     const loss = r.loss == null ? "—" : r.loss + "%";
     h += "<tr class='" + (r.local ? "local" : "") + "'><td>" + esc(r.name) + (r.local ? "<span class=tag>" + L("вы","you") + "</span>" : "") +
-         "</td><td>" + esc(r.hero) + "</td><td class='num " + pingClass(r.ping) + "'>" + (r.ping == null ? "—" : r.ping) +
+         "</td><td>" + heroIcon(r.heroKey, r.hero, "hm") + "</td><td class='num " + pingClass(r.ping) + "'>" + (r.ping == null ? "—" : r.ping) +
          "</td><td class='num " + (r.loss ? "bad" : "") + "'>" + loss + "</td><td>" + esc(r.state) + "</td>" + profile + "</tr>" + details(r);
   }
   return h + "</table>";
@@ -713,6 +777,23 @@ def parse_port(value):
     except ValueError:
         return 0
     return port if 0 < port < 65536 else 0
+
+
+def hero_keys():
+    """{valve hero id: short name}, e.g. 1 -> "antimage" (npc_dota_hero_antimage)."""
+    import draft_helper_core
+
+    raw = draft_helper_core.load_cached()
+    if not raw:
+        return {}
+    info = raw["heroinfo"]
+    ids = info.get("valveids", {})
+    vnames = info.get("vnames", {})
+    return {
+        int(ids[n]): draft_helper_core._npc_name(n, vnames).replace("npc_dota_hero_", "")
+        for n in info["heronames"]
+        if n in ids
+    }
 
 
 def hero_names():
