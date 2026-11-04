@@ -13,6 +13,12 @@
       "default": true
     },
     {
+      "key": "use_d2pt",
+      "text": "Source: dota2protracker (drafter window that follows the draft, needs -condebug)",
+      "type": "checkbox",
+      "default": false
+    },
+    {
       "key": "bracket",
       "text": "Rank (STRATZ / dotapicker)",
       "type": "combo",
@@ -97,13 +103,18 @@
     },
     {
       "key": "auto_open_player_window",
-      "text": "Open the player info window when Minify starts",
+      "text": "Open the player / D2PT windows when Minify starts",
       "type": "checkbox",
       "default": true
     },
     {
       "key": "open_player_window",
       "text": "Open player info window",
+      "type": "button"
+    },
+    {
+      "key": "open_d2pt_window",
+      "text": "Open dota2protracker drafter window",
       "type": "button"
     }
   ]

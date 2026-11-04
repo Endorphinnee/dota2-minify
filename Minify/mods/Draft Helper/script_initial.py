@@ -31,7 +31,9 @@ def main():
         if base.HEADLESS or not mods_shared.get_state(mod_name):
             return
         settings = manifest_utils.get_effective_settings(manifest_utils.get_mod(current_dir), config.get_mod(mod_name))
-        if not (settings.get("player_info") and settings.get("auto_open_player_window")):
+        players = bool(settings.get("player_info"))
+        d2pt = bool(settings.get("use_d2pt"))
+        if not ((players or d2pt) and settings.get("auto_open_player_window")):
             return
 
         import draft_helper_companion as companion
@@ -43,7 +45,9 @@ def main():
         stratz.store_token(settings.get("stratz_token"))
         russian = str(config.get("locale") or "").lower().startswith(("ru", "uk"))
         token = stratz.load_token() if settings.get("use_stratz", True) else ""
-        companion.open_when_minify_is_ready(port, token, companion.hero_names(), russian=russian, log=log.write_warning)
+        companion.open_when_minify_is_ready(
+            port, token, companion.hero_names(), russian=russian, log=log.write_warning, players=players, d2pt=d2pt
+        )
     except Exception as e:
         log.write_warning(f"[Draft Helper] player window autostart failed: {type(e).__name__}: {e}")
 

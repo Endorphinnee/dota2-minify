@@ -28,6 +28,8 @@ import time
 import types
 
 STEAM64_BASE = 76561197960265728
+D2PT_DRAFTER = "https://dota2protracker.com/drafter"
+D2PT_MIN_RELOAD = 2.0  # seconds between drafter reloads
 DEFAULT_PORT = 29000  # VConsole's port
 BRIDGE_TAG = "MDH_BRIDGE "
 STATUS_INTERVAL = 3.0
@@ -166,6 +168,25 @@ def build_player_query(token):
 
     body = " ".join(scalar) + account_part + recent_part
     return "query ($id: Long!) { player(steamAccountId: $id) { " + body + " } }", notes
+
+
+def d2pt_url(bridge):
+    """
+    dota2protracker drafter link for the current draft: ?r=<hero>.<pos>,...&d=<hero>.<pos>,...
+    (r = Radiant, d = Dire, hero = Valve hero id, pos = 1-5).
+    """
+    sides = {2: [], 3: []}
+    for p in (bridge or {}).get("players") or []:
+        hero, team = int(p.get("hero") or 0), p.get("team")
+        if hero and team in sides:
+            pos = int(p.get("pos") or 0)
+            sides[team].append(f"{hero}.{pos}" if 1 <= pos <= 5 else str(hero))
+    params = []
+    if sides[2]:
+        params.append("r=" + ",".join(sides[2]))
+    if sides[3]:
+        params.append("d=" + ",".join(sides[3]))
+    return D2PT_DRAFTER + ("?" + "&".join(params) if params else "")
 
 
 def _position_number(value):
@@ -363,7 +384,7 @@ class StatusParser:
 
 
 class Companion:
-    def __init__(self, port, token, heroes, russian=True, log=None, log_path=""):
+    def __init__(self, port, token, heroes, russian=True, log=None, log_path="", players=True, d2pt=False):
         self.port = port
         self.token = token
         self.heroes = heroes  # {valve hero id: display name}
@@ -376,6 +397,12 @@ class Companion:
         self.parser = StatusParser()
         self.stop_event = threading.Event()
         self.window = None
+        self.d2pt_window = None
+        self.want_players = players
+        self.want_d2pt = d2pt
+        self._d2pt_url = ""
+        self._d2pt_loaded_at = 0.0
+        self._windows_open = 0
         self.connected = False
         self.protocol = ""
         self.error = ""
@@ -388,24 +415,77 @@ class Companion:
     # ------------------------------------------------------------------ lifecycle
 
     def start(self):
-        import webview
-
-        self.window = webview.create_window(
-            "Draft Helper",
-            html=WINDOW_HTML,
-            width=960,
-            height=680,
-            resizable=True,
-            on_top=True,
-        )
-        try:
-            self.window.events.closed += self.stop
-            self.window.events.loaded += lambda *a: self.push()
-        except Exception:
-            pass
+        if self.want_players:
+            self.open_players()
+        if self.want_d2pt:
+            self.open_d2pt()
         threading.Thread(target=self._console_loop, name="mdh-console", daemon=True).start()
         threading.Thread(target=self._log_loop, name="mdh-log", daemon=True).start()
         threading.Thread(target=self._stats_loop, name="mdh-stats", daemon=True).start()
+
+    def _window_closed(self, which):
+        if which == "players":
+            self.window = None
+        else:
+            self.d2pt_window = None
+        self._windows_open -= 1
+        if self._windows_open <= 0:
+            self.stop()
+
+    def open_players(self):
+        import webview
+
+        if self.window is not None:
+            self._bring_to_front(self.window)
+            return
+        self.window = webview.create_window(
+            "Draft Helper", html=WINDOW_HTML, width=960, height=680, resizable=True, on_top=True
+        )
+        self._windows_open += 1
+        try:
+            self.window.events.closed += lambda *a: self._window_closed("players")
+            self.window.events.loaded += lambda *a: self.push()
+        except Exception:
+            pass
+
+    def open_d2pt(self):
+        """dota2protracker's drafter in its own window, following the draft (the page itself is not parsed)."""
+        import webview
+
+        if self.d2pt_window is not None:
+            self._bring_to_front(self.d2pt_window)
+            return
+        self._d2pt_url = d2pt_url(self.parser.bridge)
+        self._d2pt_loaded_at = time.time()
+        self.d2pt_window = webview.create_window(
+            "Draft Helper · dota2protracker", url=self._d2pt_url, width=1280, height=820, resizable=True, on_top=True
+        )
+        self._windows_open += 1
+        try:
+            self.d2pt_window.events.closed += lambda *a: self._window_closed("d2pt")
+        except Exception:
+            pass
+
+    @staticmethod
+    def _bring_to_front(window):
+        try:
+            window.show()
+            window.restore()
+        except Exception:
+            pass
+
+    def _sync_d2pt(self):
+        if self.d2pt_window is None or not self.parser.bridge:
+            return
+        url = d2pt_url(self.parser.bridge)
+        if url == self._d2pt_url or time.time() - self._d2pt_loaded_at < D2PT_MIN_RELOAD:
+            return
+        self._d2pt_url = url
+        self._d2pt_loaded_at = time.time()
+        try:
+            self.d2pt_window.load_url(url)
+        except Exception:
+            pass
 
     def stop(self, *args):
         self.stop_event.set()
@@ -620,6 +700,7 @@ class Companion:
         return row
 
     def push(self):
+        self._sync_d2pt()
         if not self.window:
             return
         try:
@@ -640,17 +721,19 @@ def console_log_path():
     return ""
 
 
-def open_window(port, token, heroes, russian=True, log=None):
-    """Opens the window, or reuses the one already open. Returns a short status string."""
+def open_window(port, token, heroes, russian=True, log=None, players=True, d2pt=False):
+    """Opens the player window and/or the D2PT drafter window, reusing a running companion.
+    Returns a short status string."""
     current = getattr(_store, "companion", None)
     if current is not None and current.alive:
-        try:
-            current.window.show()
-            current.window.restore()
-        except Exception:
-            pass
-        return "already open"
-    companion = Companion(port, token, heroes, russian=russian, log=log, log_path=console_log_path())
+        if players:
+            current.open_players()
+        if d2pt:
+            current.open_d2pt()
+        return "already running"
+    companion = Companion(
+        port, token, heroes, russian=russian, log=log, log_path=console_log_path(), players=players, d2pt=d2pt
+    )
     companion.start()
     _store.companion = companion
     return "opened"
@@ -842,7 +925,7 @@ def hero_names():
     return {int(ids[n]): n for n in info["heronames"] if n in ids}
 
 
-def open_when_minify_is_ready(port, token, heroes, russian=True, log=None, timeout=120):
+def open_when_minify_is_ready(port, token, heroes, russian=True, log=None, timeout=120, players=True, d2pt=False):
     """Used at Minify start-up: waits for Minify's own window, then opens the player window."""
 
     def worker():
@@ -858,7 +941,7 @@ def open_when_minify_is_ready(port, token, heroes, russian=True, log=None, timeo
             return
         time.sleep(3)
         try:
-            open_window(port, token, heroes, russian=russian, log=log)
+            open_window(port, token, heroes, russian=russian, log=log, players=players, d2pt=d2pt)
         except Exception as e:
             if log:
                 log(f"[Draft Helper] could not open the player window: {type(e).__name__}: {e}")

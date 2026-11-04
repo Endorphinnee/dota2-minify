@@ -1045,8 +1045,45 @@ var MinifyDraftHelper = (function () {
 
   // Prints the players (team, hero, Steam ID) to the console for the player info window in Minify,
   // which reads the console through -netconport. `status` alone only has names, ping and loss.
-  function emitBridge(draft) {
+  // Positions 1-5 for one team without duplicates: known positions (map icons) first, then each other
+  // hero takes its most played free position (STRATZ shares, or role tags without STRATZ).
+  function teamPositions(members, known) {
+    const result = {};
+    const taken = {};
+    members.forEach((m) => {
+      const pos = known[m.pid];
+      if (pos && !taken[pos]) {
+        result[m.pid] = pos;
+        taken[pos] = true;
+      }
+    });
+    members.forEach((m) => {
+      if (result[m.pid] || !m.hero) return;
+      const idx = heroIndexById[m.hero];
+      if (idx === undefined) return;
+      const order = [1, 2, 3, 4, 5].sort((a, b) => {
+        const sa = ST && ST.share[idx] ? ST.share[idx][a - 1] : positionFit(DATA.heroes[idx], a, idx, "dp");
+        const sb = ST && ST.share[idx] ? ST.share[idx][b - 1] : positionFit(DATA.heroes[idx], b, idx, "dp");
+        return sb - sa;
+      });
+      for (let i = 0; i < order.length; i++) {
+        if (!taken[order[i]]) {
+          result[m.pid] = order[i];
+          taken[order[i]] = true;
+          break;
+        }
+      }
+    });
+    return result;
+  }
+
+  function emitBridge(draft, positions) {
     if (!CFG.bridge) return;
+    const known = {};
+    Object.keys(positions || {}).forEach((pid) => {
+      if (positions[pid].pos) known[pid] = positions[pid].pos;
+    });
+    const pos = Object.assign({}, teamPositions(draft.allies, known), teamPositions(draft.enemies, {}));
     const players = [];
     draft.allies.concat(draft.enemies).forEach((p) => {
       let info = null;
@@ -1063,6 +1100,7 @@ var MinifyDraftHelper = (function () {
         name: name,
         steamid: info && info.player_steamid ? String(info.player_steamid) : "",
         hero: p.hero || 0,
+        pos: pos[p.pid] || 0,
         local: !!p.local,
       });
     });
@@ -1090,14 +1128,13 @@ var MinifyDraftHelper = (function () {
       return;
     }
 
-    if (!draft.meta) {
-      try {
-        emitBridge(draft);
-      } catch (e) {}
-    }
-
     const icons = draft.meta || CFG.autoPosition === false ? [] : readMinimapIcons();
     const positions = detectPositions(draft, icons);
+    if (!draft.meta) {
+      try {
+        emitBridge(draft, positions);
+      } catch (e) {}
+    }
     const mine = positions[draft.local];
     const autoPos = mine && mine.pos ? mine.pos : 0;
     const pos = state.manualPos || autoPos;

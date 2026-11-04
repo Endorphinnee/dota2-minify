@@ -116,28 +116,38 @@ def check_stratz():
         output.add_text("Draft Helper: STRATZ download failed, see logs/warnings.txt", msg_type="error")
 
 
-def open_player_window():
-    """Opens the always-on-top window with ping, loss and STRATZ profiles of the players in the current game."""
+def _open_windows(players, d2pt):
     settings = _settings()
     # 29000 is the port VConsole (-vconsole) uses; the console log works without any port
     port = companion.parse_port(settings.get("netcon_port")) or companion.DEFAULT_PORT
     move_token_out_of_config(settings)
-
-    heroes = companion.hero_names()
     russian = str(config.get("locale") or "").lower().startswith(("ru", "uk"))
+    token = stratz.load_token() if settings.get("use_stratz", True) else ""
     try:
-        token = stratz.load_token() if settings.get("use_stratz", True) else ""
-        result = companion.open_window(port, token, heroes, russian=russian, log=log.write_warning)
+        result = companion.open_window(
+            port, token, companion.hero_names(), russian=russian, log=log.write_warning, players=players, d2pt=d2pt
+        )
     except Exception as e:
-        log.write_warning(f"[Draft Helper] could not open the player window: {type(e).__name__}: {e}")
-        output.add_text("Draft Helper: could not open the player window, see logs/warnings.txt", msg_type="error")
+        log.write_warning(f"[Draft Helper] could not open the window: {type(e).__name__}: {e}")
+        output.add_text("Draft Helper: could not open the window, see logs/warnings.txt", msg_type="error")
         return
-    output.add_text(f"Draft Helper: player window {result} (console port {port})", msg_type="success")
-    if not settings.get("player_info"):
+    output.add_text(f"Draft Helper: window {result}", msg_type="success")
+    if not (settings.get("player_info") or settings.get("use_d2pt")):
         output.add_text(
-            "Draft Helper: enable 'Player info window' and patch, otherwise heroes and profiles stay empty",
+            "Draft Helper: enable 'Player info window' or 'Source: dota2protracker' and patch, "
+            "otherwise the windows do not get the draft",
             msg_type="warning",
         )
+
+
+def open_player_window():
+    """Opens the always-on-top window with ping, loss and STRATZ profiles of the players in the current game."""
+    _open_windows(players=True, d2pt=False)
+
+
+def open_d2pt_window():
+    """Opens dota2protracker's drafter in its own window; it follows the current draft."""
+    _open_windows(players=False, d2pt=True)
 
 
 def player_query_report(token):
